@@ -1,0 +1,4 @@
+# Рекомендуется Python 3.12 или 3.13: openpyxl + zipfile; на 3.14 в консоли возможен шум ZipFile.__del__ без поломки ZIP.
+python-slugify==8.0.4
+openpyxl==3.1.5
+xlwings>=0.30.0

@@ -1,0 +1,30 @@
+{
+  "fio": "Фарзалиев",
+  "employee_index": 1,
+  "iin": "123456789012",
+  "birth_date": "1990-01-01",
+  "company": "ООО Ромашка",
+  "profession": "Слесарь",
+  "documents": {
+    "6": "data/input/passport.pdf",
+    "7": "data/input/med.pdf",
+    "13": "data/input/ot_v.pdf",
+    "14": "data/input/ot_ab.pdf",
+    "19": "data/input/opp.pdf",
+    "26": "data/input/elb.pdf",
+    "37": "data/input/kval.pdf",
+    "43": "data/input/kor.pdf",
+    "44": "data/input/trud_dogovor.pdf",
+    "45": "data/input/soglasie.pdf",
+    "52": "data/input/photo.pdf",
+    "57": "data/input/siz.pdf",
+    "61": "data/input/pb1.pdf",
+    "63": "data/input/stajirovka.pdf",
+    "64": "data/input/dublirovanie.pdf",
+    "65": "data/input/dopusk.pdf",
+    "67": "data/input/voz.pdf"
+  },
+  "contractor_agreement": "data/input/contractor_agreement.pdf",
+  "subcontract_agreement": "data/input/subcontract_agreement.pdf",
+  "signed_application_scan": "data/input/application_scan.pdf"
+}
