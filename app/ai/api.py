@@ -170,13 +170,11 @@ def create_app(
         model = resolved_provider.health()
         if resolved_das_adapter is not None:
             das_health = resolved_das_adapter.health()
+            # base_url and error omitted from public response — internal infra details
             adapter_info: dict = {
                 "type": "das",
-                "base_url": resolved_das_adapter._base_url,
                 "status": das_health["status"],
             }
-            if "error" in das_health:
-                adapter_info["error"] = das_health["error"]
         else:
             adapter_info = {
                 "type": "json",

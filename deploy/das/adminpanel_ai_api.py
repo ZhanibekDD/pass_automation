@@ -12,9 +12,12 @@
             ai_api.document_ai_file, name="ai_document_file"),
   3. Добавить переменную окружения на сервере DAS:
        AI_INTERNAL_TOKEN=<32+ случайных символа>
-     Этот токен задать в pass_automation:
+     Этот токен задать в pass_automation (.env контейнера AI):
        AI_DAS_TOKEN=<тот же токен>
-       AI_DAS_BASE_URL=http://localhost:8000   # или внутренний адрес DAS
+       AI_DATA_ADAPTER=das
+       # В Docker контейнере localhost — это сам контейнер, а не DAS.
+       # Используй host.docker.internal (в production Compose добавлен extra_hosts):
+       AI_DAS_BASE_URL=http://host.docker.internal:8010
   4. Убедиться, что /api/ai-internal/* НЕ открыт в интернет (только localhost/internal).
 
 Этот API НЕ изменяет базу данных. Только GET.
@@ -126,11 +129,22 @@ def document_ai_file(request, document_pk: int):
     except EmployeeDocument.DoesNotExist:
         return JsonResponse({"error": "Document not found"}, status=404)
 
+    from django.http import FileResponse  # noqa: PLC0415
+
+    # Предпочитаем original_file (Django FileField) — надёжнее, чем путь к файлу.
+    if doc.original_file:
+        content_type, _ = mimetypes.guess_type(doc.original_file.name)
+        return FileResponse(
+            doc.original_file.open("rb"),
+            content_type=content_type or "application/octet-stream",
+            filename=os.path.basename(doc.original_file.name),
+        )
+
+    # Запасной вариант: source_path (текстовый путь к файлу).
     source_path = getattr(doc, "source_path", None)
     if not source_path or not os.path.isfile(str(source_path)):
         return JsonResponse({"error": "File not found on server"}, status=404)
 
-    from django.http import FileResponse  # noqa: PLC0415
     content_type, _ = mimetypes.guess_type(str(source_path))
     return FileResponse(
         open(str(source_path), "rb"),  # noqa: WPS515

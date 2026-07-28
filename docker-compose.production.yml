@@ -24,6 +24,10 @@ services:
     volumes:
       - ./data/input:/workspace/data/input:ro
       - ai_data_prod:/workspace/data/ai
+    # Позволяет контейнеру обращаться к DAS на хост-машине по host.docker.internal.
+    # Для production: AI_DAS_BASE_URL=http://host.docker.internal:8010
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # depends_on не ставим на профильный сервис vLLM: ai-api стартует независимо.
     restart: unless-stopped
     read_only: true
