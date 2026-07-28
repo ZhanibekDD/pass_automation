@@ -1,0 +1,38 @@
+services:
+  ai-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.ai
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      AI_BASE_URL: ${AI_BASE_URL:-http://ollama:11434}
+      AI_DATABASE_PATH: /workspace/data/ai/pass_docs_ai.sqlite3
+      AI_INPUT_JSON: /workspace/data/input/package_input.json
+    ports:
+      - "127.0.0.1:${AI_API_PORT:-8090}:8090"
+    volumes:
+      - ./data/input:/workspace/data/input:ro
+      - ai_data:/workspace/data/ai
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    volumes:
+      - ollama_models:/root/.ollama
+    expose:
+      - "11434"
+    restart: unless-stopped
+
+volumes:
+  ai_data:
+  ollama_models:
