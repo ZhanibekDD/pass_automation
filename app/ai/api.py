@@ -169,10 +169,14 @@ def create_app(
         database = resolved_repository.health()
         model = resolved_provider.health()
         if resolved_das_adapter is not None:
+            das_health = resolved_das_adapter.health()
             adapter_info: dict = {
                 "type": "das",
                 "base_url": resolved_das_adapter._base_url,
+                "status": das_health["status"],
             }
+            if "error" in das_health:
+                adapter_info["error"] = das_health["error"]
         else:
             adapter_info = {
                 "type": "json",
@@ -275,7 +279,9 @@ def create_app(
                 for doc in employee.documents:
                     try:
                         local_path = resolved_das_adapter.download_document_file(
-                            doc.document_id, dest_dir=tmp
+                            doc.document_id,
+                            dest_dir=tmp,
+                            max_size_mb=resolved_settings.max_file_size_mb,
                         )
                         local_docs.append(
                             DocumentSnapshot(

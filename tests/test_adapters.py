@@ -12,14 +12,14 @@ from app.ai.adapters import DASHttpAdapter, load_package_snapshot
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
+
 def _mock_http_client(status_code: int, body, content_type: str = "application/json"):
-    """Возвращает мок httpx.Client, подходящий для контекст-менеджера."""
+    """Мок httpx.Client.get() для non-streaming запросов (load_employee, list_employees, health)."""
     mock_response = MagicMock()
     mock_response.status_code = status_code
     mock_response.headers = {"content-type": content_type}
     if isinstance(body, bytes):
         mock_response.content = body
-        # Не парсим произвольные байты как JSON — бинарные ответы (.pdf, .png) не JSON
     else:
         mock_response.json.return_value = body
         mock_response.content = json.dumps(body).encode()
@@ -32,6 +32,28 @@ def _mock_http_client(status_code: int, body, content_type: str = "application/j
     return mock_client
 
 
+def _mock_stream_client(
+    status_code: int,
+    chunks: list[bytes],
+    content_type: str = "application/pdf",
+):
+    """Мок httpx.Client.stream() для потокового скачивания файлов."""
+    mock_response = MagicMock()
+    mock_response.status_code = status_code
+    mock_response.headers = {"content-type": content_type}
+    mock_response.iter_bytes.return_value = iter(chunks)
+    mock_response.raise_for_status = MagicMock()
+    mock_response.__enter__ = MagicMock(return_value=mock_response)
+    mock_response.__exit__ = MagicMock(return_value=False)
+
+    mock_client = MagicMock()
+    mock_client.__enter__ = MagicMock(return_value=mock_client)
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.stream.return_value = mock_response
+    return mock_client
+
+
+# DAS API возвращает document_id = str(EmployeeDocument.pk) — не составной "emp:code"
 _EMPLOYEE_RESPONSE = {
     "employee_id": "123",
     "import_key": "IMP-123",
@@ -42,7 +64,7 @@ _EMPLOYEE_RESPONSE = {
     "is_active": True,
     "documents": [
         {
-            "document_id": "123:6",
+            "document_id": "789",
             "document_code": 6,
             "document_type_name": "Удостоверение личности",
             "source_path": "/server/path/id.pdf",
@@ -54,6 +76,7 @@ _EMPLOYEE_RESPONSE = {
 
 
 # ── JSON adapter ───────────────────────────────────────────────────────────────
+
 
 def test_json_adapter_loads_snapshot(tmp_path: Path) -> None:
     """load_package_snapshot читает package_input.json и возвращает EmployeeSnapshot."""
@@ -86,8 +109,9 @@ def test_json_adapter_missing_file_raises(tmp_path: Path) -> None:
 
 # ── DAS adapter: load_employee ────────────────────────────────────────────────
 
+
 def test_das_adapter_loads_employee() -> None:
-    """DASHttpAdapter.load_employee() корректно парсит ответ DAS API."""
+    """DASHttpAdapter.load_employee() корректно парсит ответ DAS API; document_id = pk."""
     adapter = DASHttpAdapter(base_url="http://das.internal:8000", token="test-tok")
     mock_client = _mock_http_client(200, _EMPLOYEE_RESPONSE)
     with patch("httpx.Client", return_value=mock_client):
@@ -97,7 +121,7 @@ def test_das_adapter_loads_employee() -> None:
     assert snapshot.full_name == "Петров Пётр Петрович"
     assert snapshot.iin == "987654321098"
     assert len(snapshot.documents) == 1
-    assert snapshot.documents[0].document_id == "123:6"
+    assert snapshot.documents[0].document_id == "789"
     assert snapshot.documents[0].document_code == 6
 
 
@@ -134,17 +158,17 @@ def test_das_adapter_list_employees_401_raises() -> None:
             adapter.list_employee_ids()
 
 
-# ── DAS adapter: download_document_file ───────────────────────────────────────
+# ── DAS adapter: download_document_file (streaming) ───────────────────────────
+
 
 def test_das_adapter_download_document_pdf(tmp_path: Path) -> None:
     """download_document_file сохраняет PDF в dest_dir с расширением .pdf."""
     adapter = DASHttpAdapter(base_url="http://das.internal:8000", token="test-tok")
     pdf_bytes = b"%PDF-1.4\n%%EOF"
-    mock_client = _mock_http_client(200, pdf_bytes, content_type="application/pdf")
-    mock_client.get.return_value.content = pdf_bytes
+    mock_client = _mock_stream_client(200, [pdf_bytes], content_type="application/pdf")
 
     with patch("httpx.Client", return_value=mock_client):
-        dest = adapter.download_document_file("123:6", dest_dir=tmp_path)
+        dest = adapter.download_document_file("789", dest_dir=tmp_path)
 
     assert dest.exists()
     assert dest.suffix == ".pdf"
@@ -154,33 +178,62 @@ def test_das_adapter_download_document_pdf(tmp_path: Path) -> None:
 def test_das_adapter_download_document_png(tmp_path: Path) -> None:
     """download_document_file с PNG Content-Type сохраняет .png."""
     adapter = DASHttpAdapter(base_url="http://das.internal:8000", token="test-tok")
-    png_bytes = b"\x89PNG\r\n\x1a\n"
-    mock_client = _mock_http_client(200, png_bytes, content_type="image/png")
-    mock_client.get.return_value.content = png_bytes
+    png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+    mock_client = _mock_stream_client(200, [png_bytes], content_type="image/png")
 
     with patch("httpx.Client", return_value=mock_client):
-        dest = adapter.download_document_file("123:6", dest_dir=tmp_path)
+        dest = adapter.download_document_file("789", dest_dir=tmp_path)
 
     assert dest.suffix == ".png"
+    assert dest.read_bytes() == png_bytes
 
 
 def test_das_adapter_download_401_raises(tmp_path: Path) -> None:
     adapter = DASHttpAdapter(base_url="http://das.internal:8000", token="bad")
-    mock_client = _mock_http_client(401, b"Unauthorized")
+    mock_client = _mock_stream_client(401, [])
     with patch("httpx.Client", return_value=mock_client):
         with pytest.raises(PermissionError):
-            adapter.download_document_file("123:6", dest_dir=tmp_path)
+            adapter.download_document_file("789", dest_dir=tmp_path)
 
 
 def test_das_adapter_download_404_raises(tmp_path: Path) -> None:
     adapter = DASHttpAdapter(base_url="http://das.internal:8000", token="test-tok")
-    mock_client = _mock_http_client(404, b"Not found")
+    mock_client = _mock_stream_client(404, [])
     with patch("httpx.Client", return_value=mock_client):
-        with pytest.raises(FileNotFoundError, match="123:6"):
-            adapter.download_document_file("123:6", dest_dir=tmp_path)
+        with pytest.raises(FileNotFoundError, match="789"):
+            adapter.download_document_file("789", dest_dir=tmp_path)
+
+
+def test_das_adapter_download_exceeds_size_limit(tmp_path: Path) -> None:
+    """Превышение max_size_mb прерывает скачивание и удаляет временный файл."""
+    adapter = DASHttpAdapter(base_url="http://das.internal:8000", token="test-tok")
+    # 2 чанка по 600 КБ = 1.2 МБ > лимит 1 МБ
+    chunk = b"X" * (600 * 1024)
+    mock_client = _mock_stream_client(200, [chunk, chunk], content_type="application/pdf")
+
+    with patch("httpx.Client", return_value=mock_client):
+        with pytest.raises(ValueError, match="лимит"):
+            adapter.download_document_file("789", dest_dir=tmp_path, max_size_mb=1.0)
+
+    # Временный файл должен быть удалён при превышении лимита
+    assert not any(tmp_path.iterdir()), "Временный файл не удалён после ошибки лимита"
+
+
+def test_das_adapter_download_within_size_limit(tmp_path: Path) -> None:
+    """Файл в пределах лимита скачивается без ошибок."""
+    adapter = DASHttpAdapter(base_url="http://das.internal:8000", token="test-tok")
+    small = b"X" * 100
+    mock_client = _mock_stream_client(200, [small], content_type="application/pdf")
+
+    with patch("httpx.Client", return_value=mock_client):
+        dest = adapter.download_document_file("789", dest_dir=tmp_path, max_size_mb=1.0)
+
+    assert dest.exists()
+    assert dest.read_bytes() == small
 
 
 # ── DAS adapter init validation ───────────────────────────────────────────────
+
 
 def test_das_adapter_requires_base_url() -> None:
     with pytest.raises(ValueError, match="AI_DAS_BASE_URL"):
@@ -192,7 +245,49 @@ def test_das_adapter_requires_token() -> None:
         DASHttpAdapter(base_url="http://das:8000", token="")
 
 
+# ── DAS adapter: health ───────────────────────────────────────────────────────
+
+
+def test_das_adapter_health_ok() -> None:
+    """health() возвращает status=ok при успешном ответе DAS."""
+    adapter = DASHttpAdapter(base_url="http://das.internal:8000", token="test-tok")
+    mock_client = _mock_http_client(200, {"total": 0, "employees": []})
+    with patch("httpx.Client", return_value=mock_client):
+        result = adapter.health()
+    assert result["status"] == "ok"
+    assert "base_url" in result
+
+
+def test_das_adapter_health_auth_error() -> None:
+    """health() возвращает status=auth_error при 401 от DAS."""
+    adapter = DASHttpAdapter(base_url="http://das.internal:8000", token="bad")
+    mock_client = _mock_http_client(401, {"error": "Unauthorized"})
+    with patch("httpx.Client", return_value=mock_client):
+        result = adapter.health()
+    assert result["status"] == "auth_error"
+    assert "error" in result
+
+
+def test_das_adapter_health_unavailable() -> None:
+    """ConnectError → status: unavailable."""
+    import httpx as _httpx
+
+    adapter = DASHttpAdapter(base_url="http://das.internal:8000", token="tok")
+
+    mock_instance = MagicMock()
+    mock_instance.__enter__ = MagicMock(return_value=mock_instance)
+    mock_instance.__exit__ = MagicMock(return_value=False)
+    mock_instance.get.side_effect = _httpx.ConnectError("connection refused")
+
+    with patch("httpx.Client", return_value=mock_instance):
+        result = adapter.health()
+
+    assert result["status"] == "unavailable"
+    assert "error" in result
+
+
 # ── API: POST /api/ai/employees/{id}/analyze (JSON adapter) ──────────────────
+
 
 def test_employee_analyze_endpoint_json_adapter(tmp_path: Path) -> None:
     """POST /api/ai/employees/42/analyze с JSON адаптером возвращает 200."""
@@ -216,7 +311,7 @@ def test_employee_analyze_endpoint_json_adapter(tmp_path: Path) -> None:
             "employee_index": 42,
             "fio": "Иванов Иван Иванович",
             "iin": "123456789012",
-            "documents": {str(6): str(doc_png)},
+            "documents": {6: str(doc_png)},
         }),
         encoding="utf-8",
     )

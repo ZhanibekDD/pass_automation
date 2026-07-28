@@ -8,7 +8,7 @@
        path("api/ai-internal/employees/", ai_api.employees_ai_list, name="ai_employees_list"),
        path("api/ai-internal/employee/<int:employee_id>/",
             ai_api.employee_ai_export, name="ai_employee_export"),
-       path("api/ai-internal/documents/<str:document_id>/file/",
+       path("api/ai-internal/documents/<int:document_pk>/file/",
             ai_api.document_ai_file, name="ai_document_file"),
   3. Добавить переменную окружения на сервере DAS:
        AI_INTERNAL_TOKEN=<32+ случайных символа>
@@ -77,7 +77,7 @@ def employee_ai_export(request, employee_id: int):
             continue  # пропускаем нечисловые коды (vehicle docs и т.д.)
         documents.append(
             {
-                "document_id": f"{employee.pk}:{doc_code_raw}",
+                "document_id": str(doc.pk),
                 "document_code": doc_code_int,
                 "document_type_name": doc.document_type.name,
                 "source_path": doc.source_path,
@@ -101,10 +101,11 @@ def employee_ai_export(request, employee_id: int):
 
 
 @require_GET
-def document_ai_file(request, document_id: str):
-    """GET /api/ai-internal/documents/{document_id}/file/ — файл документа для AI анализа.
+def document_ai_file(request, document_pk: int):
+    """GET /api/ai-internal/documents/{document_pk}/file/ — файл документа для AI анализа.
 
-    document_id формат: "{employee_id}:{document_type_code}".
+    document_pk — целочисленный первичный ключ EmployeeDocument.
+    Уникально идентифицирует документ даже при нескольких документах одного типа.
     Возвращает содержимое файла (streaming). Только GET. Production-данные не изменяются.
     NAS credentials не раскрываются: путь файла в лог не попадает.
     """
@@ -114,19 +115,13 @@ def document_ai_file(request, document_id: str):
     import mimetypes
     import os
 
-    try:
-        employee_id_str, code_str = document_id.split(":", 1)
-        employee_id = int(employee_id_str)
-    except (ValueError, TypeError):
-        return JsonResponse({"error": "Invalid document_id: expected employee_id:code"}, status=400)
-
     from pass_docs.models import EmployeeDocument  # noqa: PLC0415
 
     try:
         doc = (
             EmployeeDocument.objects
             .select_related("document_type")
-            .get(employee__pk=employee_id, document_type__code=code_str, is_actual=True)
+            .get(pk=document_pk, is_actual=True)
         )
     except EmployeeDocument.DoesNotExist:
         return JsonResponse({"error": "Document not found"}, status=404)

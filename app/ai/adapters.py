@@ -98,37 +98,75 @@ class DASHttpAdapter:
             documents=documents,
         )
 
-    def download_document_file(self, document_id: str, *, dest_dir: Path) -> Path:
-        """Скачивает файл документа из DAS в dest_dir.
+    def download_document_file(
+        self, document_id: str, *, dest_dir: Path, max_size_mb: float = 10.0
+    ) -> Path:
+        """Потоковое скачивание файла документа из DAS в dest_dir.
 
-        Caller отвечает за удаление файла (используйте tempfile.TemporaryDirectory).
-        SHA-256 вычисляется в DocumentAIService.file_sha256 после скачивания.
+        Прерывает загрузку и удаляет временный файл при превышении max_size_mb.
+        Caller отвечает за удаление каталога (используйте tempfile.TemporaryDirectory).
         """
         import httpx
 
         url = f"{self._base_url}/api/ai-internal/documents/{document_id}/file/"
+        max_bytes = int(max_size_mb * 1024 * 1024)
+
         with httpx.Client(timeout=self._timeout) as client:
-            response = client.get(url, headers=self._headers())
-        if response.status_code == 401:
-            raise PermissionError("DAS AI token неверен (401)")
-        if response.status_code == 404:
-            raise FileNotFoundError(f"Документ {document_id} не найден в DAS")
-        response.raise_for_status()
+            with client.stream("GET", url, headers=self._headers()) as response:
+                if response.status_code == 401:
+                    raise PermissionError("DAS AI token неверен (401)")
+                if response.status_code == 404:
+                    raise FileNotFoundError(f"Документ {document_id} не найден в DAS")
+                response.raise_for_status()
 
-        content_type = response.headers.get("content-type", "").lower()
-        if "pdf" in content_type:
-            ext = ".pdf"
-        elif "jpeg" in content_type or "jpg" in content_type:
-            ext = ".jpg"
-        elif "png" in content_type:
-            ext = ".png"
-        else:
-            ext = ".bin"
+                content_type = response.headers.get("content-type", "").lower()
+                if "pdf" in content_type:
+                    ext = ".pdf"
+                elif "jpeg" in content_type or "jpg" in content_type:
+                    ext = ".jpg"
+                elif "png" in content_type:
+                    ext = ".png"
+                else:
+                    ext = ".bin"
 
-        safe_id = document_id.replace("/", "_").replace(":", "_").replace("..", "_")
-        dest_file = dest_dir / f"{safe_id}{ext}"
-        dest_file.write_bytes(response.content)
+                safe_id = document_id.replace("/", "_").replace(":", "_").replace("..", "_")
+                dest_file = dest_dir / f"{safe_id}{ext}"
+                total = 0
+                try:
+                    with dest_file.open("wb") as f:
+                        for chunk in response.iter_bytes(chunk_size=65536):
+                            total += len(chunk)
+                            if total > max_bytes:
+                                raise ValueError(
+                                    f"Файл документа {document_id} превышает"
+                                    f" лимит {max_size_mb:.0f} МБ"
+                                )
+                            f.write(chunk)
+                except Exception:
+                    dest_file.unlink(missing_ok=True)
+                    raise
+
         return dest_file
+
+    def health(self) -> dict:
+        """Проверяет доступность DAS API. Timeout 5 сек (не зависит от self._timeout)."""
+        import httpx
+
+        url = f"{self._base_url}/api/ai-internal/employees/?limit=1"
+        try:
+            with httpx.Client(timeout=5.0) as client:
+                r = client.get(url, headers=self._headers())
+            if r.status_code == 401:
+                return {"status": "auth_error", "error": "401 Unauthorized", "base_url": self._base_url}
+            if r.status_code >= 400:
+                return {"status": "error", "error": f"HTTP {r.status_code}", "base_url": self._base_url}
+            return {"status": "ok", "base_url": self._base_url}
+        except Exception as exc:
+            return {
+                "status": "unavailable",
+                "error": f"{type(exc).__name__}: {exc}",
+                "base_url": self._base_url,
+            }
 
     def list_employee_ids(self, *, company: str = "", limit: int = 100, offset: int = 0) -> list[int]:
         """Возвращает список ID активных сотрудников из DAS."""
