@@ -12,12 +12,13 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 
-from app.ai.adapters import load_package_snapshot
+from app.ai.adapters import DASHttpAdapter, get_das_adapter, load_package_snapshot
 from app.ai.auth import AuthContext, TokenRegistry, require_role
 from app.ai.config import AISettings
 from app.ai.db import AIRepository
 from app.ai.providers import VisionProvider, create_provider
 from app.ai.schemas import (
+    DocumentSnapshot,
     EmployeeSnapshot,
     ReviewUpdate,
     VehicleAnalyzeRequest,
@@ -56,6 +57,8 @@ def create_app(
                 )
             )
         resolved_registry = env_registry
+
+    resolved_das_adapter: DASHttpAdapter | None = get_das_adapter()
 
     service = DocumentAIService(
         settings=resolved_settings,
@@ -104,9 +107,40 @@ def create_app(
             details=details or {},
         )
 
-    def _load_employee() -> EmployeeSnapshot:
+    def _load_employee(employee_id: str | None = None) -> EmployeeSnapshot:
+        if resolved_das_adapter is not None:
+            if employee_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="employee_id обязателен при AI_DATA_ADAPTER=das",
+                )
+            try:
+                return resolved_das_adapter.load_employee(employee_id)
+            except PermissionError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="DAS: неверный токен аутентификации",
+                ) from exc
+            except FileNotFoundError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Сотрудник {employee_id} не найден в DAS",
+                ) from exc
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=f"DAS adapter недоступен: {type(exc).__name__}",
+                ) from exc
         try:
-            return load_package_snapshot(resolved_settings.input_json_path)
+            emp = load_package_snapshot(resolved_settings.input_json_path)
+            if employee_id is not None and emp.employee_id != employee_id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Сотрудник {employee_id} не найден",
+                )
+            return emp
+        except HTTPException:
+            raise
         except (FileNotFoundError, InputLoaderError, ValueError, OSError) as exc:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -134,7 +168,16 @@ def create_app(
     def health() -> dict:
         database = resolved_repository.health()
         model = resolved_provider.health()
-        input_status = "ok" if resolved_settings.input_json_path.is_file() else "unavailable"
+        if resolved_das_adapter is not None:
+            adapter_info: dict = {
+                "type": "das",
+                "base_url": resolved_das_adapter._base_url,
+            }
+        else:
+            adapter_info = {
+                "type": "json",
+                "status": "ok" if resolved_settings.input_json_path.is_file() else "unavailable",
+            }
         overall = (
             "ok"
             if database["status"] == "ok" and (not resolved_settings.enabled or model["status"] == "ok")
@@ -145,7 +188,7 @@ def create_app(
             "enabled": resolved_settings.enabled,
             "database": database,
             "model": model,
-            "input_adapter": input_status,
+            "input_adapter": adapter_info,
             "read_only_production": True,
             "shadow_mode": True,
         }
@@ -205,18 +248,79 @@ def create_app(
         employee_id: str,
         auth: AuthContext = Depends(require_role("viewer")),
     ) -> dict:
-        employee = _load_employee()
-        if employee.employee_id != employee_id:
-            raise HTTPException(status_code=404, detail="Сотрудник не найден")
+        employee = _load_employee(employee_id)
         _audit(auth, "api_read", "employee", employee_id)
         return service.check_completeness(employee, persist=False)
+
+    @app.post("/api/ai/employees/{employee_id}/analyze")
+    def analyze_employee(
+        employee_id: str,
+        auth: AuthContext = Depends(require_role("operator")),
+    ) -> dict:
+        """Запускает AI-анализ всех документов сотрудника.
+
+        При AI_DATA_ADAPTER=das файлы скачиваются из DAS в temp-директорию,
+        анализируются и удаляются. Production-БД не изменяется.
+        """
+        import tempfile
+
+        employee = _load_employee(employee_id)
+        _audit(auth, "employee_analyze_start", "employee", employee_id)
+
+        if resolved_das_adapter is not None:
+            download_errors: list[dict] = []
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmp = Path(tmpdir)
+                local_docs: list[DocumentSnapshot] = []
+                for doc in employee.documents:
+                    try:
+                        local_path = resolved_das_adapter.download_document_file(
+                            doc.document_id, dest_dir=tmp
+                        )
+                        local_docs.append(
+                            DocumentSnapshot(
+                                document_id=doc.document_id,
+                                document_code=doc.document_code,
+                                source_path=local_path,
+                            )
+                        )
+                    except Exception as exc:
+                        download_errors.append(
+                            {"document_id": doc.document_id, "error": f"{type(exc).__name__}: {exc}"}
+                        )
+                local_employee = EmployeeSnapshot(
+                    employee_id=employee.employee_id,
+                    full_name=employee.full_name,
+                    iin=employee.iin,
+                    documents=tuple(local_docs),
+                )
+                try:
+                    result = service.analyze_employee(local_employee)
+                except Exception as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail=f"Ошибка анализа: {type(exc).__name__}",
+                    ) from exc
+            result["download_errors"] = download_errors
+        else:
+            try:
+                result = service.analyze_employee(employee)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=f"Ошибка анализа: {type(exc).__name__}",
+                ) from exc
+
+        _audit(auth, "employee_analyze_done", "employee", employee_id)
+        return result
 
     @app.get("/api/ai/documents/{document_id}/analysis")
     def document_analysis(
         document_id: str,
         auth: AuthContext = Depends(require_role("viewer")),
     ) -> dict:
-        employee = _load_employee()
+        employee_part = document_id.split(":", 1)[0]
+        employee = _load_employee(employee_part)
         known_document_ids = {item.document_id for item in employee.documents}
         if document_id not in known_document_ids:
             raise HTTPException(status_code=404, detail="Документ не найден")

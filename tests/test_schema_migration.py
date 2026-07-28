@@ -1,4 +1,4 @@
-"""Тест миграции SQLite: обновление существующей phase-1 БД (v1) до v2."""
+"""Тест миграции SQLite: обновление БД v1→v2→v3."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from app.ai.db import SCHEMA_V1_SQL, SCHEMA_VERSION, AIRepository
+from app.ai.db import SCHEMA_V1_SQL, SCHEMA_V2_SQL, SCHEMA_VERSION, AIRepository
 
 
 def _create_v1_db(db_path: Path) -> None:
@@ -163,6 +163,98 @@ def test_vehicle_completeness_uses_document_code(tmp_path: Path) -> None:
     # registration и inspection ещё не обработаны
     assert set(result["missing_documents"]) == {"registration", "inspection"}
     assert result["is_complete"] is False
+
+
+# ------------------------------------------------------------------ v2 → v3
+
+
+def _create_v2_db(db_path: Path) -> None:
+    """Создаёт базу данных версии 2 (коммит 6495cbc): без document_code и без ai_vehicle_extractions."""
+    conn = sqlite3.connect(db_path)
+    conn.executescript(SCHEMA_V2_SQL)
+    conn.execute("PRAGMA user_version = 2")
+    conn.commit()
+    conn.close()
+
+
+def test_v2_to_v3_adds_document_code_column(tmp_path: Path) -> None:
+    """После миграции v2→v3 в ai_vehicle_runs появляется document_code."""
+    db_path = tmp_path / "v2.sqlite3"
+    _create_v2_db(db_path)
+
+    assert "document_code" not in _column_names(db_path, "ai_vehicle_runs")
+
+    AIRepository(db_path).initialize()
+
+    assert "document_code" in _column_names(db_path, "ai_vehicle_runs"), (
+        "document_code должен быть добавлен в ai_vehicle_runs при миграции v2→v3"
+    )
+
+
+def test_v2_to_v3_creates_vehicle_extractions_table(tmp_path: Path) -> None:
+    """После миграции v2→v3 создаётся таблица ai_vehicle_extractions."""
+    db_path = tmp_path / "v2.sqlite3"
+    _create_v2_db(db_path)
+
+    assert "ai_vehicle_extractions" not in _table_names(db_path)
+
+    AIRepository(db_path).initialize()
+
+    assert "ai_vehicle_extractions" in _table_names(db_path), (
+        "ai_vehicle_extractions должна быть создана при миграции v2→v3"
+    )
+
+
+def test_v2_to_v3_sets_schema_version_3(tmp_path: Path) -> None:
+    db_path = tmp_path / "v2.sqlite3"
+    _create_v2_db(db_path)
+
+    AIRepository(db_path).initialize()
+
+    conn = sqlite3.connect(db_path)
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    conn.close()
+    assert version == SCHEMA_VERSION, f"user_version должен быть {SCHEMA_VERSION}, получен {version}"
+
+
+def test_v2_to_v3_migration_idempotent(tmp_path: Path) -> None:
+    """Повторный initialize() на v3 БД идемпотентен."""
+    db_path = tmp_path / "v2.sqlite3"
+    _create_v2_db(db_path)
+
+    repo = AIRepository(db_path)
+    repo.initialize()
+    repo.initialize()  # второй вызов не должен ломать
+
+    conn = sqlite3.connect(db_path)
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    conn.close()
+    assert version == SCHEMA_VERSION
+
+
+def test_v2_to_v3_preserves_existing_vehicle_runs(tmp_path: Path) -> None:
+    """Данные ai_vehicle_runs сохраняются после миграции v2→v3."""
+    db_path = tmp_path / "v2.sqlite3"
+    _create_v2_db(db_path)
+
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO ai_vehicle_runs"
+        " (vehicle_id, document_id, source_file, provider, model, status, started_at)"
+        " VALUES ('v1', 'v1:reg', 'reg.pdf', 'ollama', 'qwen', 'completed', '2024-01-01T00:00:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    AIRepository(db_path).initialize()
+
+    conn2 = sqlite3.connect(db_path)
+    count = conn2.execute("SELECT COUNT(*) FROM ai_vehicle_runs").fetchone()[0]
+    doc_code = conn2.execute("SELECT document_code FROM ai_vehicle_runs LIMIT 1").fetchone()[0]
+    conn2.close()
+
+    assert count == 1, "Запись ai_vehicle_runs потеряна при миграции v2→v3"
+    assert doc_code is None, "document_code старых строк должен быть NULL"
 
 
 @pytest.mark.parametrize("required", [["registration"], ["insurance", "inspection"]])

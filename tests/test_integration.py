@@ -232,27 +232,17 @@ def _make_vehicle_extraction(**overrides) -> VehiclePageExtraction:
 
 
 def test_vehicle_analyze_endpoint_e2e(tmp_path: Path) -> None:
-    """POST /api/ai/vehicles/{id}/analyze → 200, results in vehicle_analysis."""
+    """POST /api/ai/vehicles/{id}/analyze → строго 200, extractions сохранены."""
+    from PIL import Image
 
     settings = make_settings(tmp_path)
     repo = make_repository(settings)
 
-    # Создаём тестовый PDF (минимальный валидный файл для тестов — используем байты)
-    doc_file = settings.input_json_path.parent / "test_insurance.pdf"
+    # PIL создаёт гарантированно валидное PNG (iter_document_pages принимает PNG напрямую)
+    doc_file = settings.input_json_path.parent / "test_insurance.png"
     doc_file.parent.mkdir(parents=True, exist_ok=True)
-    # Записываем валидный 1-страничный PDF
-    doc_file.write_bytes(
-        b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
-        b"2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n"
-        b"3 0 obj<</Type/Page/MediaBox[0 0 612 792]/Parent 2 0 R>>endobj\n"
-        b"xref\n0 4\n0000000000 65535 f\n"
-        b"0000000009 00000 n\n"
-        b"0000000058 00000 n\n"
-        b"0000000115 00000 n\n"
-        b"trailer<</Size 4/Root 1 0 R>>\nstartxref\n190\n%%EOF"
-    )
+    Image.new("RGB", (400, 300), color="white").save(doc_file, format="PNG")
 
-    # Mock провайдер — возвращает VehiclePageExtraction без реального AI
     class MockVehicleProvider(DisabledVisionProvider):
         def extract_vehicle(self, *, image_bytes, prompt) -> VehiclePageExtraction:
             return _make_vehicle_extraction()
@@ -262,7 +252,6 @@ def test_vehicle_analyze_endpoint_e2e(tmp_path: Path) -> None:
                      provider=MockVehicleProvider(settings), token_registry=registry)
 
     with TestClient(app) as client:
-        # Запуск анализа (operator)
         resp = client.post(
             "/api/ai/vehicles/v-001/analyze",
             json={
@@ -274,17 +263,30 @@ def test_vehicle_analyze_endpoint_e2e(tmp_path: Path) -> None:
             },
             headers={"x-api-key": "tok-operator"},
         )
-        # ожидаем либо 200 (AI прошёл), либо 503 (PDF не распознан — нет страниц)
-        # В тесте файл создан как минимальный PDF, iter_document_pages может вернуть 0 страниц.
-        # Поэтому допускаем 200 ИЛИ 503.
-        assert resp.status_code in (200, 503), f"Неожиданный статус: {resp.status_code}: {resp.text}"
+        assert resp.status_code == 200, (
+            f"Ожидался 200, получен {resp.status_code}: {resp.text}"
+        )
 
-        # После анализа completeness должна видеть document_code (если run завершился)
+        body = resp.json()
+        assert "runs" in body
+        assert "findings" in body
+        assert "extractions" in body, "vehicle_analysis должен возвращать extractions"
+
+        runs = body["runs"]
+        assert any(r["status"] == "completed" for r in runs), (
+            f"Ожидался run 'completed', получено: {[r['status'] for r in runs]}"
+        )
+
+        extractions = body["extractions"]
+        assert extractions, "Extractions должны быть сохранены (7 полей × 1 страница)"
+        field_names = {e["field_name"] for e in extractions}
+        assert "plate_number" in field_names
+        assert "driver_name" in field_names
+
         compl = client.get("/api/ai/vehicles/v-001/completeness", headers={"x-api-key": "tok-viewer"})
         assert compl.status_code == 200
-        body = compl.json()
-        assert "required_document_codes" in body
-        assert "missing_documents" in body
+        comp_body = compl.json()
+        assert "insurance" in comp_body["analyzed_document_codes"]
 
 
 def test_vehicle_analyze_requires_operator_role(tmp_path: Path) -> None:

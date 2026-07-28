@@ -8,6 +8,8 @@
        path("api/ai-internal/employees/", ai_api.employees_ai_list, name="ai_employees_list"),
        path("api/ai-internal/employee/<int:employee_id>/",
             ai_api.employee_ai_export, name="ai_employee_export"),
+       path("api/ai-internal/documents/<str:document_id>/file/",
+            ai_api.document_ai_file, name="ai_document_file"),
   3. Добавить переменную окружения на сервере DAS:
        AI_INTERNAL_TOKEN=<32+ случайных символа>
      Этот токен задать в pass_automation:
@@ -95,6 +97,50 @@ def employee_ai_export(request, employee_id: int):
             "is_active": employee.is_active,
             "documents": documents,
         }
+    )
+
+
+@require_GET
+def document_ai_file(request, document_id: str):
+    """GET /api/ai-internal/documents/{document_id}/file/ — файл документа для AI анализа.
+
+    document_id формат: "{employee_id}:{document_type_code}".
+    Возвращает содержимое файла (streaming). Только GET. Production-данные не изменяются.
+    NAS credentials не раскрываются: путь файла в лог не попадает.
+    """
+    if not _authenticate(request):
+        return JsonResponse({"error": "Unauthorized"}, status=401)
+
+    import mimetypes
+    import os
+
+    try:
+        employee_id_str, code_str = document_id.split(":", 1)
+        employee_id = int(employee_id_str)
+    except (ValueError, TypeError):
+        return JsonResponse({"error": "Invalid document_id: expected employee_id:code"}, status=400)
+
+    from pass_docs.models import EmployeeDocument  # noqa: PLC0415
+
+    try:
+        doc = (
+            EmployeeDocument.objects
+            .select_related("document_type")
+            .get(employee__pk=employee_id, document_type__code=code_str, is_actual=True)
+        )
+    except EmployeeDocument.DoesNotExist:
+        return JsonResponse({"error": "Document not found"}, status=404)
+
+    source_path = getattr(doc, "source_path", None)
+    if not source_path or not os.path.isfile(str(source_path)):
+        return JsonResponse({"error": "File not found on server"}, status=404)
+
+    from django.http import FileResponse  # noqa: PLC0415
+    content_type, _ = mimetypes.guess_type(str(source_path))
+    return FileResponse(
+        open(str(source_path), "rb"),  # noqa: WPS515
+        content_type=content_type or "application/octet-stream",
+        filename=os.path.basename(str(source_path)),
     )
 
 

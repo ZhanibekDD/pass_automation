@@ -27,6 +27,16 @@ EXTRACTION_FIELDS = (
     "expiry_date",
 )
 
+VEHICLE_EXTRACTION_FIELDS = (
+    "document_type",
+    "plate_number",
+    "vin",
+    "registration_number",
+    "driver_name",
+    "issue_date",
+    "expiry_date",
+)
+
 
 def file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -310,6 +320,18 @@ class VehicleAIService:
                     prompt=prompt,
                 )
                 page_results.append((page.number, extraction))
+                for field_name in VEHICLE_EXTRACTION_FIELDS:
+                    field = getattr(extraction, field_name)
+                    self.repository.add_vehicle_extraction(
+                        run_id=run_id,
+                        vehicle_id=vehicle.vehicle_id,
+                        document_id=document.document_id,
+                        field_name=field_name,
+                        found_value=field.value,
+                        confidence=field.confidence,
+                        source_file=source_file,
+                        page_number=page.number,
+                    )
 
             issues = evaluate_vehicle_document(
                 vehicle=vehicle,

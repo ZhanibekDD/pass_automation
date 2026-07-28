@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # ---------------------------------------------------------------------------
 # Схема v1 — для тестов миграции (воспроизводит состояние phase-1 БД).
@@ -112,6 +112,165 @@ CREATE TABLE IF NOT EXISTS ai_audit_log (
 """
 
 # ---------------------------------------------------------------------------
+# Схема v2 — для тестов миграции v2→v3.
+# Идентична состоянию из коммита 6495cbc:
+#   ai_audit_log содержит ip_address и role (добавлены в v2),
+#   ai_vehicle_runs НЕ содержит document_code (добавлен в v3),
+#   ai_vehicle_extractions отсутствует (создана в v3).
+# ---------------------------------------------------------------------------
+SCHEMA_V2_SQL = """
+CREATE TABLE IF NOT EXISTS ai_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    employee_id TEXT NOT NULL,
+    document_id TEXT,
+    source_file TEXT NOT NULL DEFAULT '',
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed')),
+    error TEXT,
+    started_at TEXT NOT NULL,
+    completed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS ai_extractions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES ai_runs(id) ON DELETE CASCADE,
+    employee_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    field_name TEXT NOT NULL,
+    found_value TEXT,
+    confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+    source_file TEXT NOT NULL,
+    page_number INTEGER NOT NULL CHECK(page_number > 0),
+    operator_status TEXT NOT NULL DEFAULT 'not_reviewed'
+        CHECK(operator_status IN ('not_reviewed', 'confirmed', 'rejected')),
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_findings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER REFERENCES ai_runs(id) ON DELETE SET NULL,
+    employee_id TEXT NOT NULL,
+    document_id TEXT,
+    issue_code TEXT NOT NULL,
+    field_name TEXT,
+    found_value TEXT,
+    confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+    source_file TEXT NOT NULL DEFAULT '',
+    page_number INTEGER,
+    severity TEXT NOT NULL CHECK(severity IN ('low', 'medium', 'high')),
+    message TEXT NOT NULL,
+    operator_status TEXT NOT NULL DEFAULT 'not_reviewed'
+        CHECK(operator_status IN ('not_reviewed', 'confirmed', 'rejected')),
+    dedupe_key TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_review_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type TEXT NOT NULL CHECK(entity_type IN ('extraction', 'finding')),
+    entity_id INTEGER NOT NULL,
+    employee_id TEXT NOT NULL,
+    document_id TEXT,
+    reason_code TEXT NOT NULL,
+    priority TEXT NOT NULL CHECK(priority IN ('low', 'medium', 'high')),
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending', 'confirmed', 'rejected')),
+    operator_id TEXT,
+    operator_comment TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    reviewed_at TEXT,
+    UNIQUE(entity_type, entity_id)
+);
+
+CREATE TABLE IF NOT EXISTS ai_document_fingerprints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    employee_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    source_file TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(employee_id, document_id, source_file)
+);
+
+CREATE INDEX IF NOT EXISTS idx_fingerprints_sha256
+    ON ai_document_fingerprints(sha256);
+CREATE INDEX IF NOT EXISTS idx_extractions_document
+    ON ai_extractions(document_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_findings_employee
+    ON ai_findings(employee_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_review_status
+    ON ai_review_queue(status, priority, created_at);
+
+CREATE TABLE IF NOT EXISTS ai_audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor_type TEXT NOT NULL CHECK(actor_type IN ('ai', 'user', 'system')),
+    actor_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT,
+    ip_address TEXT NOT NULL DEFAULT '',
+    role TEXT NOT NULL DEFAULT '',
+    details_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_vehicle_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vehicle_id TEXT NOT NULL,
+    document_id TEXT,
+    source_file TEXT NOT NULL DEFAULT '',
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed')),
+    error TEXT,
+    started_at TEXT NOT NULL,
+    completed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS ai_vehicle_findings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER REFERENCES ai_vehicle_runs(id) ON DELETE SET NULL,
+    vehicle_id TEXT NOT NULL,
+    document_id TEXT,
+    issue_code TEXT NOT NULL,
+    field_name TEXT,
+    found_value TEXT,
+    confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+    source_file TEXT NOT NULL DEFAULT '',
+    page_number INTEGER,
+    severity TEXT NOT NULL CHECK(severity IN ('low', 'medium', 'high')),
+    message TEXT NOT NULL,
+    operator_status TEXT NOT NULL DEFAULT 'not_reviewed'
+        CHECK(operator_status IN ('not_reviewed', 'confirmed', 'rejected')),
+    dedupe_key TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_vehicle_review_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type TEXT NOT NULL DEFAULT 'finding',
+    entity_id INTEGER NOT NULL,
+    vehicle_id TEXT NOT NULL,
+    document_id TEXT,
+    reason_code TEXT NOT NULL,
+    priority TEXT NOT NULL CHECK(priority IN ('low', 'medium', 'high')),
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending', 'confirmed', 'rejected')),
+    operator_id TEXT,
+    operator_comment TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    reviewed_at TEXT,
+    UNIQUE(entity_type, entity_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vehicle_findings_vehicle
+    ON ai_vehicle_findings(vehicle_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_vehicle_queue_status
+    ON ai_vehicle_review_queue(status, priority, created_at);
+"""
+
+# ---------------------------------------------------------------------------
 # Новые объекты v2 (таблицы ТС + столбцы audit_log).
 # Используются в миграции v1→v2 и в тестах.
 # ---------------------------------------------------------------------------
@@ -173,7 +332,31 @@ CREATE INDEX IF NOT EXISTS idx_vehicle_queue_status
 """
 
 # ---------------------------------------------------------------------------
-# Полная схема v2 — для свежих баз данных (CREATE TABLE IF NOT EXISTS).
+# Новые объекты v3: извлечённые поля документов ТС (per-field extractions).
+# ---------------------------------------------------------------------------
+_V3_ADDITIONS_SQL = """
+CREATE TABLE IF NOT EXISTS ai_vehicle_extractions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES ai_vehicle_runs(id) ON DELETE CASCADE,
+    vehicle_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    field_name TEXT NOT NULL,
+    found_value TEXT,
+    confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+    source_file TEXT NOT NULL,
+    page_number INTEGER NOT NULL CHECK(page_number > 0),
+    operator_status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(operator_status IN ('pending', 'confirmed', 'rejected')),
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_vehicle_extractions_run
+    ON ai_vehicle_extractions(run_id);
+CREATE INDEX IF NOT EXISTS idx_vehicle_extractions_vehicle
+    ON ai_vehicle_extractions(vehicle_id, created_at);
+"""
+
+# ---------------------------------------------------------------------------
+# Полная схема v3 — для свежих баз данных (CREATE TABLE IF NOT EXISTS).
 # ---------------------------------------------------------------------------
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS ai_runs (
@@ -326,6 +509,25 @@ CREATE INDEX IF NOT EXISTS idx_vehicle_findings_vehicle
     ON ai_vehicle_findings(vehicle_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_vehicle_queue_status
     ON ai_vehicle_review_queue(status, priority, created_at);
+
+CREATE TABLE IF NOT EXISTS ai_vehicle_extractions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES ai_vehicle_runs(id) ON DELETE CASCADE,
+    vehicle_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    field_name TEXT NOT NULL,
+    found_value TEXT,
+    confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+    source_file TEXT NOT NULL,
+    page_number INTEGER NOT NULL CHECK(page_number > 0),
+    operator_status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(operator_status IN ('pending', 'confirmed', 'rejected')),
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_vehicle_extractions_run
+    ON ai_vehicle_extractions(run_id);
+CREATE INDEX IF NOT EXISTS idx_vehicle_extractions_vehicle
+    ON ai_vehicle_extractions(vehicle_id, created_at);
 """
 
 
@@ -358,9 +560,22 @@ def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
     conn.executescript(_V2_NEW_TABLES_SQL)
 
 
+def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
+    """Идемпотентная миграция v2→v3.
+
+    - Добавляет document_code в ai_vehicle_runs (если отсутствует).
+    - Создаёт ai_vehicle_extractions для хранения извлечённых полей ТС.
+    """
+    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(ai_vehicle_runs)").fetchall()}
+    if "document_code" not in existing_cols:
+        conn.execute("ALTER TABLE ai_vehicle_runs ADD COLUMN document_code TEXT")
+    conn.executescript(_V3_ADDITIONS_SQL)
+
+
 # Реестр миграций: from_version → функция
 _MIGRATIONS: dict[int, Any] = {
     1: _migrate_v1_to_v2,
+    2: _migrate_v2_to_v3,
 }
 
 
@@ -963,6 +1178,57 @@ class AIRepository:
             "findings": {row["issue_code"]: row["count"] for row in issues},
         }
 
+    def add_vehicle_extraction(
+        self,
+        *,
+        run_id: int,
+        vehicle_id: str,
+        document_id: str,
+        field_name: str,
+        found_value: str | None,
+        confidence: float,
+        source_file: str,
+        page_number: int,
+    ) -> int:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO ai_vehicle_extractions (
+                    run_id, vehicle_id, document_id, field_name, found_value,
+                    confidence, source_file, page_number, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    vehicle_id,
+                    document_id,
+                    field_name,
+                    _json_value(found_value),
+                    confidence,
+                    source_file,
+                    page_number,
+                    utc_now(),
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def vehicle_extractions(self, vehicle_id: str) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM ai_vehicle_extractions
+                WHERE vehicle_id = ?
+                ORDER BY created_at DESC, page_number, field_name
+                """,
+                (vehicle_id,),
+            ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["found_value"] = _read_json_value(item["found_value"])
+            result.append(item)
+        return result
+
     def vehicle_analysis(self, vehicle_id: str) -> dict[str, Any]:
         with self._connect() as connection:
             runs = [
@@ -979,10 +1245,28 @@ class AIRepository:
                     (vehicle_id,),
                 ).fetchall()
             ]
+            extractions = [
+                dict(row)
+                for row in connection.execute(
+                    """
+                    SELECT * FROM ai_vehicle_extractions
+                    WHERE vehicle_id = ?
+                    ORDER BY created_at DESC, page_number, field_name
+                    """,
+                    (vehicle_id,),
+                ).fetchall()
+            ]
         for item in findings:
             item["found_value"] = _read_json_value(item["found_value"])
             item.pop("dedupe_key", None)
-        return {"vehicle_id": vehicle_id, "runs": runs, "findings": findings}
+        for item in extractions:
+            item["found_value"] = _read_json_value(item["found_value"])
+        return {
+            "vehicle_id": vehicle_id,
+            "runs": runs,
+            "findings": findings,
+            "extractions": extractions,
+        }
 
     def vehicle_completeness(self, vehicle_id: str, *, required_codes: list[str]) -> dict[str, Any]:
         """Сравниваем document_code (не document_id) с required_codes."""
