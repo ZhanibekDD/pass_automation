@@ -6,13 +6,12 @@ from datetime import UTC, date, datetime
 
 from app.ai.rules import parse_document_date
 from app.ai.schemas import (
-    PageExtraction,
     RuleIssue,
     VehicleDocumentSnapshot,
+    VehiclePageExtraction,
     VehicleSnapshot,
 )
 
-# Коды транспортных документов (переопределяются через env AI_VEHICLE_DOC_CODES)
 VEHICLE_DOCUMENT_CODES: dict[str, str] = {
     "registration": "Свидетельство о регистрации ТС",
     "insurance": "Страховой полис (ОСАГО/КАСКО)",
@@ -33,7 +32,7 @@ def evaluate_vehicle_document(
     *,
     vehicle: VehicleSnapshot,
     document: VehicleDocumentSnapshot,
-    pages: list[tuple[int, PageExtraction]],
+    pages: list[tuple[int, VehiclePageExtraction]],
     confidence_threshold: float,
     today: date | None = None,
 ) -> list[RuleIssue]:
@@ -52,8 +51,8 @@ def evaluate_vehicle_document(
         conf, page, val = max(candidates)
         return page, val, conf
 
-    _, found_plate, plate_conf = best("iin")  # номер ТС — в поле iin по аналогии
-    _, found_fio, fio_conf = best("full_name")
+    _, found_plate, plate_conf = best("plate_number")
+    _, found_driver, driver_conf = best("driver_name")
     page_expiry, expiry_str, expiry_conf = best("expiry_date")
 
     # 1. Несовпадение госномера
@@ -76,19 +75,19 @@ def evaluate_vehicle_document(
             )
 
     # 2. Неверный водитель
-    if vehicle.driver and found_fio:
+    if vehicle.driver and found_driver:
         from app.ai.rules import normalize_fio
 
-        if normalize_fio(found_fio) != normalize_fio(vehicle.driver):
+        if normalize_fio(found_driver) != normalize_fio(vehicle.driver):
             issues.append(
                 RuleIssue(
                     issue_code="wrong_driver",
-                    field_name="full_name",
-                    found_value=found_fio,
-                    confidence=fio_conf,
+                    field_name="driver_name",
+                    found_value=found_driver,
+                    confidence=driver_conf,
                     page_number=None,
                     severity="high",
-                    message=(f"ФИО в документе «{found_fio}» не совпадает с водителем «{vehicle.driver}»"),
+                    message=(f"ФИО в документе «{found_driver}» не совпадает с водителем «{vehicle.driver}»"),
                 )
             )
 
@@ -149,7 +148,7 @@ def evaluate_vehicle_document(
                 )
 
     # 4. Низкая уверенность
-    for field_name in ("full_name", "iin", "expiry_date", "issue_date"):
+    for field_name in ("driver_name", "plate_number", "vin", "expiry_date", "issue_date"):
         page_n, value, conf = best(field_name)
         if value is not None and conf < confidence_threshold:
             issues.append(
@@ -172,7 +171,11 @@ def check_vehicle_completeness(
     *,
     required_codes: frozenset[str] | None = None,
 ) -> list[RuleIssue]:
-    """Возвращает issues для отсутствующих обязательных документов."""
+    """Возвращает issues для отсутствующих обязательных документов.
+
+    Сравниваем по document_code (строка «registration», «insurance»…),
+    а не по document_id (составной «v1:insurance»).
+    """
     codes = required_codes if required_codes is not None else REQUIRED_VEHICLE_CODES
     existing = {doc.document_code for doc in vehicle.documents}
     issues = []

@@ -6,7 +6,7 @@ from typing import Any
 
 from app.ai.config import AISettings
 from app.ai.db import AIRepository
-from app.ai.prompts import build_page_prompt
+from app.ai.prompts import build_page_prompt, build_vehicle_page_prompt
 from app.ai.providers import VisionProvider
 from app.ai.rules import evaluate_document
 from app.ai.schemas import (
@@ -268,6 +268,7 @@ class VehicleAIService:
         run_id = self.repository.create_vehicle_run(
             vehicle_id=vehicle.vehicle_id,
             document_id=document.document_id,
+            document_code=document.document_code,
             source_file=source_file,
             provider=self.settings.provider,
             model=self.settings.model,
@@ -302,10 +303,11 @@ class VehicleAIService:
                 )
 
             page_results = []
+            prompt = build_vehicle_page_prompt(document.document_code)
             for page in iter_document_pages(document.source_path, self.settings):
-                extraction = self.provider.extract(
+                extraction = self.provider.extract_vehicle(
                     image_bytes=page.image_bytes,
-                    prompt=build_page_prompt(document.document_code),
+                    prompt=prompt,
                 )
                 page_results.append((page.number, extraction))
 

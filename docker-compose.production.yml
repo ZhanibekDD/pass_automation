@@ -9,7 +9,7 @@ services:
       dockerfile: Dockerfile.ai
     env_file:
       - path: .env
-        required: true
+        required: false  # В production .env обязателен; обеспечивается процессом деплоя, не compose config.
     environment:
       AI_ENABLED: "true"
       AI_PROVIDER: vllm
@@ -24,9 +24,7 @@ services:
     volumes:
       - ./data/input:/workspace/data/input:ro
       - ai_data_prod:/workspace/data/ai
-    depends_on:
-      vllm:
-        condition: service_healthy
+    # depends_on не ставим на профильный сервис vLLM: ai-api стартует независимо.
     restart: unless-stopped
     read_only: true
     tmpfs:

@@ -1,11 +1,13 @@
 """FastAPI приложение Pass Docs Local AI.
 
 Аутентификация: X-Api-Key + роль (viewer/operator/reviewer/admin).
+operator_id берётся из description токена — клиент не может его подделать.
 Production-БД не изменяется ни при каких условиях.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
@@ -15,7 +17,13 @@ from app.ai.auth import AuthContext, TokenRegistry, require_role
 from app.ai.config import AISettings
 from app.ai.db import AIRepository
 from app.ai.providers import VisionProvider, create_provider
-from app.ai.schemas import EmployeeSnapshot, ReviewUpdate
+from app.ai.schemas import (
+    EmployeeSnapshot,
+    ReviewUpdate,
+    VehicleAnalyzeRequest,
+    VehicleDocumentSnapshot,
+    VehicleSnapshot,
+)
 from app.ai.service import DocumentAIService, VehicleAIService
 from app.services.input_loader import InputLoaderError
 
@@ -62,7 +70,7 @@ def create_app(
 
     app = FastAPI(
         title="Pass Docs Local AI",
-        version="0.2.0",
+        version="0.3.0",
         description=(
             "Локальный sidecar для анализа документов. Production-БД не изменяется. Shadow mode only."
         ),
@@ -104,6 +112,21 @@ def create_app(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=f"Источник сотрудников недоступен: {type(exc).__name__}",
             ) from exc
+
+    def _resolve_source_path(raw: str) -> Path:
+        """Проверяет, что путь находится внутри data/input — произвольный доступ запрещён."""
+        candidate = Path(raw).resolve()
+        data_root = (resolved_settings.input_json_path.parent).resolve()
+        try:
+            candidate.relative_to(data_root)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"source_path должен быть внутри {data_root}",
+            ) from None
+        if not candidate.exists():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Файл документа не найден")
+        return candidate
 
     # ------------------------------------------------------------------ health (открыт)
 
@@ -233,33 +256,14 @@ def create_app(
         payload: ReviewUpdate,
         auth: AuthContext = Depends(require_role("reviewer")),
     ) -> dict:
-        from app.ai.db import utc_now as _utc_now
-
-        with resolved_repository._connect() as conn:
-            row = conn.execute("SELECT * FROM ai_vehicle_review_queue WHERE id = ?", (item_id,)).fetchone()
-            if row is None:
-                raise HTTPException(status_code=404, detail="Элемент очереди не найден")
-            conn.execute(
-                """
-                UPDATE ai_vehicle_review_queue
-                SET status = ?, operator_id = ?, operator_comment = ?, reviewed_at = ?
-                WHERE id = ?
-                """,
-                (
-                    payload.status,
-                    auth.operator_id,
-                    payload.comment,
-                    _utc_now(),
-                    item_id,
-                ),
-            )
-            conn.execute(
-                "UPDATE ai_vehicle_findings SET operator_status = ? WHERE id = ?",
-                (payload.status, row["entity_id"]),
-            )
-            updated = conn.execute(
-                "SELECT * FROM ai_vehicle_review_queue WHERE id = ?", (item_id,)
-            ).fetchone()
+        item = resolved_repository.update_vehicle_review(
+            item_id=item_id,
+            status=payload.status,
+            operator_id=auth.operator_id,
+            comment=payload.comment,
+        )
+        if item is None:
+            raise HTTPException(status_code=404, detail="Элемент очереди не найден")
         _audit(
             auth,
             f"vehicle_review_{payload.status}",
@@ -267,7 +271,59 @@ def create_app(
             str(item_id),
             {"comment": payload.comment},
         )
-        return dict(updated)
+        return item
+
+    @app.post("/api/ai/vehicles/{vehicle_id}/analyze")
+    def analyze_vehicle(
+        vehicle_id: str,
+        payload: VehicleAnalyzeRequest,
+        auth: AuthContext = Depends(require_role("operator")),
+    ) -> dict:
+        """Запускает AI-анализ одного документа ТС.
+
+        source_path — путь к файлу на сервере, должен быть внутри data/input/.
+        Все AI-значения попадают в review queue и требуют подтверждения оператором.
+        Production-БД не изменяется.
+        """
+        source_path = _resolve_source_path(payload.source_path)
+        vehicle = VehicleSnapshot(
+            vehicle_id=vehicle_id,
+            plate_number=payload.plate_number,
+            make=payload.make,
+            model=payload.vehicle_model,
+            vehicle_type=payload.vehicle_type,
+            color=payload.color,
+            owner=payload.owner,
+            organization=payload.organization,
+            driver=payload.driver,
+            site_object=payload.site_object,
+            pass_number=payload.pass_number,
+            pass_start=None,
+            pass_end=None,
+            status="",
+            access_zone="",
+        )
+        document = VehicleDocumentSnapshot(
+            document_id=payload.document_id,
+            document_code=payload.document_code,
+            source_path=source_path,
+        )
+        _audit(
+            auth,
+            "vehicle_analyze_start",
+            "vehicle",
+            vehicle_id,
+            {"document_code": payload.document_code, "document_id": payload.document_id},
+        )
+        try:
+            result = vehicle_service.analyze_vehicle_document(vehicle, document)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Ошибка анализа: {type(exc).__name__}",
+            ) from exc
+        _audit(auth, "vehicle_analyze_done", "vehicle", vehicle_id)
+        return result
 
     @app.get("/api/ai/vehicles/{vehicle_id}/completeness")
     def vehicle_completeness(

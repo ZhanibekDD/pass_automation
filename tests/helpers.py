@@ -46,7 +46,6 @@ def make_settings(
         max_image_dimension=1200,
         required_vehicle_document_codes=("registration", "insurance", "inspection"),
         dated_vehicle_document_codes=("insurance", "inspection"),
-        pg_dsn="",
     )
 
 

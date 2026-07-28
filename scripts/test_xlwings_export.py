@@ -14,9 +14,9 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from app.config import BASE_DIR
-from app.services.input_loader import load_package_input
-from app.services.excel_writer_xlwings import export_workbook_with_reestr_xlwings
+from app.config import BASE_DIR  # noqa: E402
+from app.services.excel_writer_xlwings import export_workbook_with_reestr_xlwings  # noqa: E402
+from app.services.input_loader import load_package_input  # noqa: E402
 
 
 def main() -> None:

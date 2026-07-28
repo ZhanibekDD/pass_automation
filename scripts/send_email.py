@@ -37,7 +37,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from app.config import BASE_DIR
+from app.config import BASE_DIR  # noqa: E402
 
 # Типичный лимит вложений у почтовых сервисов ~25 МБ
 MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024

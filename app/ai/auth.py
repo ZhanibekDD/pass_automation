@@ -5,6 +5,10 @@
   operator — viewer + запуск анализа
   reviewer — operator + подтверждение/отклонение результатов AI
   admin    — всё + управление токенами и просмотр audit log
+
+operator_id берётся из поля description токена (доверенная сторона),
+а НЕ из заголовка X-Operator-Id (клиент-контролируемое — нельзя доверять).
+Клиент не может подделать actor_id в audit log.
 """
 
 from __future__ import annotations
@@ -29,15 +33,15 @@ _ROLE_WEIGHT: dict[Role, int] = {
     "admin": 40,
 }
 
-# Имена заголовков
 _HEADER_API_KEY = "x-api-key"
-_HEADER_OPERATOR = "x-operator-id"
 
 
 @dataclass(frozen=True)
 class TokenEntry:
     token_hash: str  # SHA-256 hex of the raw token
     role: Role
+    # description идентифицирует владельца токена и используется как operator_id в audit log.
+    # Пример: "alice", "ops-bot", "reviewer-1".
     description: str = ""
 
 
@@ -46,7 +50,7 @@ class TokenRegistry:
     """Реестр токенов из переменных окружения или файла JSON.
 
     Формат файла (AI_TOKEN_FILE):
-        [{"token": "raw-value", "role": "reviewer", "description": "..."}]
+        [{"token": "raw-value", "role": "reviewer", "description": "alice"}]
 
     Переменные окружения (при отсутствии файла):
         AI_TOKEN_VIEWER, AI_TOKEN_OPERATOR, AI_TOKEN_REVIEWER, AI_TOKEN_ADMIN
@@ -101,24 +105,25 @@ def _sha256(value: str) -> str:
 
 @dataclass(frozen=True)
 class AuthContext:
+    # Идентификатор оператора из description токена — доверенный, клиент не может изменить.
     operator_id: str
     role: Role
     ip: str
 
 
 def require_role(minimum_role: Role):
-    """FastAPI dependency: проверяет X-Api-Key и возвращает AuthContext."""
+    """FastAPI dependency: проверяет X-Api-Key и возвращает AuthContext.
+
+    operator_id берётся из TokenEntry.description — клиент не может его подделать.
+    """
 
     def _dependency(
         request: Request,
         x_api_key: Annotated[str | None, Header()] = None,
-        x_operator_id: Annotated[str, Header()] = "anonymous",
     ) -> AuthContext:
         registry: TokenRegistry = request.app.state.token_registry
 
         if registry.is_empty():
-            # Если токены не настроены — здесь нельзя разрешить доступ;
-            # единственное исключение — health (вынесен отдельно).
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Токены не настроены. Задайте AI_TOKEN_* в окружении.",
@@ -151,11 +156,9 @@ def require_role(minimum_role: Role):
             or request.headers.get("x-forwarded-for", "").split(",")[0].strip()
             or (request.client.host if request.client else "unknown")
         )
-        return AuthContext(
-            operator_id=x_operator_id,
-            role=entry.role,
-            ip=ip,
-        )
+        # operator_id из description токена — это доверенная идентичность владельца ключа.
+        operator_id = entry.description or f"token:{entry.token_hash[:12]}"
+        return AuthContext(operator_id=operator_id, role=entry.role, ip=ip)
 
     return _dependency
 

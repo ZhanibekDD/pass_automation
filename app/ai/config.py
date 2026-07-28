@@ -69,8 +69,6 @@ class AISettings:
     # vehicle document codes (string-based, not int)
     required_vehicle_document_codes: tuple[str, ...]
     dated_vehicle_document_codes: tuple[str, ...]
-    # PostgreSQL (пустая строка = используем SQLite)
-    pg_dsn: str
 
     @classmethod
     def from_env(cls) -> AISettings:
@@ -107,7 +105,6 @@ class AISettings:
                 "AI_DATED_VEHICLE_DOC_CODES",
                 ("insurance", "inspection", "power_of_attorney", "vehicle_pass"),
             ),
-            pg_dsn=os.getenv("AI_PG_DSN", "").strip(),
         )
         settings.validate()
         return settings

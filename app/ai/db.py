@@ -10,6 +10,171 @@ from typing import Any
 
 SCHEMA_VERSION = 2
 
+# ---------------------------------------------------------------------------
+# Схема v1 — для тестов миграции (воспроизводит состояние phase-1 БД).
+# ai_audit_log в v1 НЕ содержит ip_address и role.
+# Таблиц ai_vehicle_* в v1 нет.
+# ---------------------------------------------------------------------------
+SCHEMA_V1_SQL = """
+CREATE TABLE IF NOT EXISTS ai_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    employee_id TEXT NOT NULL,
+    document_id TEXT,
+    source_file TEXT NOT NULL DEFAULT '',
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed')),
+    error TEXT,
+    started_at TEXT NOT NULL,
+    completed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS ai_extractions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES ai_runs(id) ON DELETE CASCADE,
+    employee_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    field_name TEXT NOT NULL,
+    found_value TEXT,
+    confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+    source_file TEXT NOT NULL,
+    page_number INTEGER NOT NULL CHECK(page_number > 0),
+    operator_status TEXT NOT NULL DEFAULT 'not_reviewed'
+        CHECK(operator_status IN ('not_reviewed', 'confirmed', 'rejected')),
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_findings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER REFERENCES ai_runs(id) ON DELETE SET NULL,
+    employee_id TEXT NOT NULL,
+    document_id TEXT,
+    issue_code TEXT NOT NULL,
+    field_name TEXT,
+    found_value TEXT,
+    confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+    source_file TEXT NOT NULL DEFAULT '',
+    page_number INTEGER,
+    severity TEXT NOT NULL CHECK(severity IN ('low', 'medium', 'high')),
+    message TEXT NOT NULL,
+    operator_status TEXT NOT NULL DEFAULT 'not_reviewed'
+        CHECK(operator_status IN ('not_reviewed', 'confirmed', 'rejected')),
+    dedupe_key TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_review_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type TEXT NOT NULL CHECK(entity_type IN ('extraction', 'finding')),
+    entity_id INTEGER NOT NULL,
+    employee_id TEXT NOT NULL,
+    document_id TEXT,
+    reason_code TEXT NOT NULL,
+    priority TEXT NOT NULL CHECK(priority IN ('low', 'medium', 'high')),
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending', 'confirmed', 'rejected')),
+    operator_id TEXT,
+    operator_comment TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    reviewed_at TEXT,
+    UNIQUE(entity_type, entity_id)
+);
+
+CREATE TABLE IF NOT EXISTS ai_document_fingerprints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    employee_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    source_file TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(employee_id, document_id, source_file)
+);
+
+CREATE INDEX IF NOT EXISTS idx_fingerprints_sha256
+    ON ai_document_fingerprints(sha256);
+CREATE INDEX IF NOT EXISTS idx_extractions_document
+    ON ai_extractions(document_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_findings_employee
+    ON ai_findings(employee_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_review_status
+    ON ai_review_queue(status, priority, created_at);
+
+CREATE TABLE IF NOT EXISTS ai_audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor_type TEXT NOT NULL CHECK(actor_type IN ('ai', 'user', 'system')),
+    actor_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT,
+    details_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+"""
+
+# ---------------------------------------------------------------------------
+# Новые объекты v2 (таблицы ТС + столбцы audit_log).
+# Используются в миграции v1→v2 и в тестах.
+# ---------------------------------------------------------------------------
+_V2_NEW_TABLES_SQL = """
+CREATE TABLE IF NOT EXISTS ai_vehicle_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vehicle_id TEXT NOT NULL,
+    document_id TEXT,
+    document_code TEXT,
+    source_file TEXT NOT NULL DEFAULT '',
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed')),
+    error TEXT,
+    started_at TEXT NOT NULL,
+    completed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS ai_vehicle_findings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER REFERENCES ai_vehicle_runs(id) ON DELETE SET NULL,
+    vehicle_id TEXT NOT NULL,
+    document_id TEXT,
+    issue_code TEXT NOT NULL,
+    field_name TEXT,
+    found_value TEXT,
+    confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+    source_file TEXT NOT NULL DEFAULT '',
+    page_number INTEGER,
+    severity TEXT NOT NULL CHECK(severity IN ('low', 'medium', 'high')),
+    message TEXT NOT NULL,
+    operator_status TEXT NOT NULL DEFAULT 'not_reviewed'
+        CHECK(operator_status IN ('not_reviewed', 'confirmed', 'rejected')),
+    dedupe_key TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ai_vehicle_review_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type TEXT NOT NULL DEFAULT 'finding',
+    entity_id INTEGER NOT NULL,
+    vehicle_id TEXT NOT NULL,
+    document_id TEXT,
+    reason_code TEXT NOT NULL,
+    priority TEXT NOT NULL CHECK(priority IN ('low', 'medium', 'high')),
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending', 'confirmed', 'rejected')),
+    operator_id TEXT,
+    operator_comment TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    reviewed_at TEXT,
+    UNIQUE(entity_type, entity_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vehicle_findings_vehicle
+    ON ai_vehicle_findings(vehicle_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_vehicle_queue_status
+    ON ai_vehicle_review_queue(status, priority, created_at);
+"""
+
+# ---------------------------------------------------------------------------
+# Полная схема v2 — для свежих баз данных (CREATE TABLE IF NOT EXISTS).
+# ---------------------------------------------------------------------------
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS ai_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,6 +276,7 @@ CREATE TABLE IF NOT EXISTS ai_vehicle_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     vehicle_id TEXT NOT NULL,
     document_id TEXT,
+    document_code TEXT,
     source_file TEXT NOT NULL DEFAULT '',
     provider TEXT NOT NULL,
     model TEXT NOT NULL,
@@ -177,6 +343,27 @@ def _read_json_value(value: str | None) -> str | None:
     return json.loads(value)
 
 
+def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
+    """Идемпотентная миграция v1→v2.
+
+    Добавляет ip_address и role в ai_audit_log (если отсутствуют),
+    создаёт таблицы транспортных средств и индексы.
+    """
+    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(ai_audit_log)").fetchall()}
+    if "ip_address" not in existing_cols:
+        conn.execute("ALTER TABLE ai_audit_log ADD COLUMN ip_address TEXT NOT NULL DEFAULT ''")
+    if "role" not in existing_cols:
+        conn.execute("ALTER TABLE ai_audit_log ADD COLUMN role TEXT NOT NULL DEFAULT ''")
+    # Создаём таблицы ТС (IF NOT EXISTS — безопасно повторять)
+    conn.executescript(_V2_NEW_TABLES_SQL)
+
+
+# Реестр миграций: from_version → функция
+_MIGRATIONS: dict[int, Any] = {
+    1: _migrate_v1_to_v2,
+}
+
+
 class AIRepository:
     """Изолированное хранилище AI. Не подключается к production-БД."""
 
@@ -202,9 +389,20 @@ class AIRepository:
         return connection
 
     def initialize(self) -> None:
-        with self._connect() as connection:
-            connection.executescript(SCHEMA_SQL)
-            connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        with self._connect() as conn:
+            current_ver: int = conn.execute("PRAGMA user_version").fetchone()[0]
+            if current_ver == 0:
+                # Новая база: создаём полную схему v2 сразу
+                conn.executescript(SCHEMA_SQL)
+                conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            elif current_ver < SCHEMA_VERSION:
+                # Существующая база: применяем миграции последовательно
+                for ver in range(current_ver, SCHEMA_VERSION):
+                    migration_fn = _MIGRATIONS.get(ver)
+                    if migration_fn is not None:
+                        migration_fn(conn)
+                conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            # current_ver == SCHEMA_VERSION → ничего не делаем
 
     def health(self) -> dict[str, Any]:
         with self._connect() as connection:
@@ -580,6 +778,7 @@ class AIRepository:
         *,
         vehicle_id: str,
         document_id: str | None,
+        document_code: str | None = None,
         source_file: str,
         provider: str,
         model: str,
@@ -588,11 +787,11 @@ class AIRepository:
             cursor = connection.execute(
                 """
                 INSERT INTO ai_vehicle_runs (
-                    vehicle_id, document_id, source_file, provider, model,
+                    vehicle_id, document_id, document_code, source_file, provider, model,
                     status, started_at
-                ) VALUES (?, ?, ?, ?, ?, 'running', ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, 'running', ?)
                 """,
-                (vehicle_id, document_id, source_file, provider, model, utc_now()),
+                (vehicle_id, document_id, document_code, source_file, provider, model, utc_now()),
             )
             return int(cursor.lastrowid)
 
@@ -624,8 +823,6 @@ class AIRepository:
         severity: str,
         message: str,
     ) -> int:
-        import hashlib as _hl
-
         dedupe_source = json.dumps(
             {
                 "vehicle_id": vehicle_id,
@@ -639,7 +836,7 @@ class AIRepository:
             ensure_ascii=False,
             sort_keys=True,
         )
-        dedupe_key = _hl.sha256(dedupe_source.encode()).hexdigest()
+        dedupe_key = hashlib.sha256(dedupe_source.encode()).hexdigest()
         with self._connect() as connection:
             connection.execute(
                 """
@@ -788,24 +985,69 @@ class AIRepository:
         return {"vehicle_id": vehicle_id, "runs": runs, "findings": findings}
 
     def vehicle_completeness(self, vehicle_id: str, *, required_codes: list[str]) -> dict[str, Any]:
+        """Сравниваем document_code (не document_id) с required_codes."""
         with self._connect() as connection:
-            analyzed_docs = [
-                row["document_id"]
+            analyzed_codes = [
+                row["document_code"]
                 for row in connection.execute(
-                    "SELECT DISTINCT document_id FROM ai_vehicle_runs"
-                    " WHERE vehicle_id = ? AND document_id IS NOT NULL",
+                    """
+                    SELECT DISTINCT document_code
+                    FROM ai_vehicle_runs
+                    WHERE vehicle_id = ? AND document_code IS NOT NULL
+                    """,
                     (vehicle_id,),
                 ).fetchall()
             ]
-        missing = [c for c in required_codes if c not in analyzed_docs]
+        missing = [c for c in required_codes if c not in analyzed_codes]
         return {
             "vehicle_id": vehicle_id,
             "required_document_codes": required_codes,
-            "analyzed_document_codes": analyzed_docs,
+            "analyzed_document_codes": analyzed_codes,
             "missing_documents": missing,
             "is_complete": not missing,
             "findings": self.vehicle_findings(vehicle_id),
         }
+
+    def update_vehicle_review(
+        self,
+        *,
+        item_id: int,
+        status: str,
+        operator_id: str,
+        comment: str,
+    ) -> dict[str, Any] | None:
+        if status not in {"confirmed", "rejected"}:
+            raise ValueError("Некорректный статус ручной проверки")
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM ai_vehicle_review_queue WHERE id = ?", (item_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            connection.execute(
+                """
+                UPDATE ai_vehicle_review_queue
+                SET status = ?, operator_id = ?, operator_comment = ?, reviewed_at = ?
+                WHERE id = ?
+                """,
+                (status, operator_id, comment, utc_now(), item_id),
+            )
+            connection.execute(
+                "UPDATE ai_vehicle_findings SET operator_status = ? WHERE id = ?",
+                (status, row["entity_id"]),
+            )
+            updated = connection.execute(
+                "SELECT * FROM ai_vehicle_review_queue WHERE id = ?", (item_id,)
+            ).fetchone()
+        self.audit(
+            actor_type="user",
+            actor_id=operator_id,
+            action=f"vehicle_review_{status}",
+            entity_type="vehicle_review_item",
+            entity_id=str(item_id),
+            details={"comment": comment},
+        )
+        return dict(updated)
 
     # ------------------------------------------------------------------ audit
 

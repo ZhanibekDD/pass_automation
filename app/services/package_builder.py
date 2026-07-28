@@ -4,9 +4,9 @@ from slugify import slugify
 
 from app.config import (
     BASE_DIR,
+    CONTRACTOR_FOLDER_NAME,
     OUTPUT_DIR,
     PDF_FOLDER_NAME,
-    CONTRACTOR_FOLDER_NAME,
     SUBCONTRACTOR_FOLDER_NAME,
 )
 from app.constants.doc_catalog import DOC_CATALOG

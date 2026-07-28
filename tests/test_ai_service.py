@@ -25,6 +25,9 @@ class FakeVisionProvider(VisionProvider):
             expiry_date=ExtractedField(value="01.01.2025", confidence=0.92),
         )
 
+    def extract_vehicle(self, *, image_bytes: bytes, prompt: str):
+        raise RuntimeError("extract_vehicle не используется в DocumentAIService")
+
 
 def test_service_persists_results_and_review_queue(tmp_path) -> None:
     image_path = tmp_path / "identity.png"
