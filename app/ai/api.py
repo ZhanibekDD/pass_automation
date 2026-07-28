@@ -184,7 +184,9 @@ def create_app(
             }
         overall = (
             "ok"
-            if database["status"] == "ok" and (not resolved_settings.enabled or model["status"] == "ok")
+            if database["status"] == "ok"
+            and (not resolved_settings.enabled or model["status"] == "ok")
+            and adapter_info.get("status") == "ok"
             else "degraded"
         )
         return {
@@ -325,13 +327,11 @@ def create_app(
         document_id: str,
         auth: AuthContext = Depends(require_role("viewer")),
     ) -> dict:
-        employee_part = document_id.split(":", 1)[0]
-        employee = _load_employee(employee_part)
-        known_document_ids = {item.document_id for item in employee.documents}
-        if document_id not in known_document_ids:
-            raise HTTPException(status_code=404, detail="Документ не найден")
         _audit(auth, "api_read", "document", document_id)
-        return resolved_repository.document_analysis(document_id)
+        result = resolved_repository.document_analysis(document_id)
+        if not result["runs"] and not result["extractions"] and not result["findings"]:
+            raise HTTPException(status_code=404, detail="Анализ документа не найден")
+        return result
 
     # ------------------------------------------------------------------ vehicles
 

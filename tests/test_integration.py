@@ -325,3 +325,94 @@ def test_vehicle_analyze_rejects_path_outside_data(tmp_path: Path) -> None:
             headers={"x-api-key": "tok-operator"},
         )
     assert resp.status_code == 400, f"Ожидался 400, получен {resp.status_code}"
+
+
+# ── document_analysis endpoint (pk-based document_id) ─────────────────────────
+
+
+def test_document_analysis_returns_data_by_pk(tmp_path: Path) -> None:
+    """GET /api/ai/documents/789/analysis работает с pk-based document_id без split(':')."""
+    settings = make_settings(tmp_path)
+    repo = make_repository(settings)
+    run_id = repo.create_run(
+        employee_id="emp1",
+        document_id="789",
+        source_file="id.pdf",
+        provider="ollama",
+        model="qwen",
+    )
+    repo.finish_run(run_id, "completed")
+
+    app = _app(settings=settings, repo=repo, registry=_registry(viewer="tok-viewer"))
+    with TestClient(app) as client:
+        resp = client.get("/api/ai/documents/789/analysis", headers={"x-api-key": "tok-viewer"})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["document_id"] == "789"
+    assert len(body["runs"]) == 1
+    assert body["runs"][0]["status"] == "completed"
+
+
+def test_document_analysis_returns_404_when_not_found(tmp_path: Path) -> None:
+    """Пустой результат (нет runs/extractions/findings) → 404."""
+    settings = make_settings(tmp_path)
+    repo = make_repository(settings)
+    app = _app(settings=settings, repo=repo, registry=_registry(viewer="tok-viewer"))
+    with TestClient(app) as client:
+        resp = client.get("/api/ai/documents/999/analysis", headers={"x-api-key": "tok-viewer"})
+    assert resp.status_code == 404
+
+
+# ── health overall status ──────────────────────────────────────────────────────
+
+
+def test_health_overall_degraded_when_json_file_missing(tmp_path: Path) -> None:
+    """health.status=degraded когда package_input.json отсутствует (JSON адаптер)."""
+    settings = make_settings(tmp_path, enabled=False)
+    # package_input.json не создаём → input_adapter.status = "unavailable"
+    app = _app(settings=settings, registry=_registry(viewer="tok"))
+    with TestClient(app) as client:
+        resp = client.get("/api/ai/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["input_adapter"]["status"] == "unavailable"
+    assert body["status"] == "degraded"
+
+
+def test_health_overall_ok_when_json_file_present(tmp_path: Path) -> None:
+    """health.status=ok когда JSON-файл существует и модель отключена."""
+    settings = make_settings(tmp_path, enabled=False)
+    settings.input_json_path.write_text("{}", encoding="utf-8")
+    app = _app(settings=settings, registry=_registry(viewer="tok"))
+    with TestClient(app) as client:
+        resp = client.get("/api/ai/health")
+    body = resp.json()
+    assert body["input_adapter"]["status"] == "ok"
+    assert body["status"] == "ok"
+
+
+def test_health_overall_degraded_when_model_unavailable_and_enabled(tmp_path: Path) -> None:
+    """health.status=degraded когда модель недоступна и enabled=True."""
+
+    class UnavailableProvider(VisionProvider):
+        def health(self):
+            return {"status": "unavailable", "provider": "ollama", "model": "test", "error": "x"}
+
+        def extract(self, *, image_bytes, prompt) -> PageExtraction:  # type: ignore[return]
+            raise RuntimeError("unavailable")
+
+        def extract_vehicle(self, *, image_bytes, prompt) -> VehiclePageExtraction:  # type: ignore[return]
+            raise RuntimeError("unavailable")
+
+    settings = make_settings(tmp_path, enabled=True)
+    settings.input_json_path.write_text("{}", encoding="utf-8")
+    repo = make_repository(settings)
+    app = _app(settings=settings, repo=repo,
+                provider=UnavailableProvider(settings),
+                registry=_registry(viewer="tok"))
+    with TestClient(app) as client:
+        resp = client.get("/api/ai/health")
+    body = resp.json()
+    assert body["model"]["status"] == "unavailable"
+    assert body["status"] == "degraded"
