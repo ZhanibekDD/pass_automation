@@ -170,10 +170,10 @@ def create_app(
         model = resolved_provider.health()
         if resolved_das_adapter is not None:
             das_health = resolved_das_adapter.health()
-            # base_url and error omitted from public response — internal infra details
+            # Only ok/degraded exposed publicly — internal codes (auth_error/unavailable/error) omitted
             adapter_info: dict = {
                 "type": "das",
-                "status": das_health["status"],
+                "status": "ok" if das_health["status"] == "ok" else "degraded",
             }
         else:
             adapter_info = {

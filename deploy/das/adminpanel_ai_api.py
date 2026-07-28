@@ -133,12 +133,15 @@ def document_ai_file(request, document_pk: int):
 
     # Предпочитаем original_file (Django FileField) — надёжнее, чем путь к файлу.
     if doc.original_file:
-        content_type, _ = mimetypes.guess_type(doc.original_file.name)
-        return FileResponse(
-            doc.original_file.open("rb"),
-            content_type=content_type or "application/octet-stream",
-            filename=os.path.basename(doc.original_file.name),
-        )
+        try:
+            content_type, _ = mimetypes.guess_type(doc.original_file.name)
+            return FileResponse(
+                doc.original_file.open("rb"),
+                content_type=content_type or "application/octet-stream",
+                filename=os.path.basename(doc.original_file.name),
+            )
+        except (FileNotFoundError, OSError):
+            pass  # файл удалён или недоступен — переходим к source_path
 
     # Запасной вариант: source_path (текстовый путь к файлу).
     source_path = getattr(doc, "source_path", None)
