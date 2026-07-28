@@ -28,9 +28,7 @@ def _env_codes(name: str, default: tuple[int, ...]) -> tuple[int, ...]:
     value = os.getenv(name)
     if value is None:
         return default
-    return tuple(
-        sorted({int(item.strip()) for item in value.split(",") if item.strip()})
-    )
+    return tuple(sorted({int(item.strip()) for item in value.split(",") if item.strip()}))
 
 
 def _env_path(name: str, default: Path) -> Path:
@@ -41,6 +39,13 @@ def _env_path(name: str, default: Path) -> Path:
     if not path.is_absolute():
         path = BASE_DIR / path
     return path.resolve()
+
+
+def _env_str_list(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return tuple(item.strip() for item in value.split(",") if item.strip())
 
 
 @dataclass(frozen=True)
@@ -61,6 +66,11 @@ class AISettings:
     max_pages: int
     render_dpi: int
     max_image_dimension: int
+    # vehicle document codes (string-based, not int)
+    required_vehicle_document_codes: tuple[str, ...]
+    dated_vehicle_document_codes: tuple[str, ...]
+    # PostgreSQL (пустая строка = используем SQLite)
+    pg_dsn: str
 
     @classmethod
     def from_env(cls) -> AISettings:
@@ -68,11 +78,7 @@ class AISettings:
         if provider not in {"ollama", "vllm"}:
             raise ValueError("AI_PROVIDER должен быть 'ollama' или 'vllm'")
 
-        default_url = (
-            "http://ollama:11434"
-            if provider == "ollama"
-            else "http://host.docker.internal:8000"
-        )
+        default_url = "http://ollama:11434" if provider == "ollama" else "http://host.docker.internal:8000"
         settings = cls(
             enabled=_env_bool("AI_ENABLED", False),
             provider=provider,
@@ -80,15 +86,9 @@ class AISettings:
             model=os.getenv("AI_VISION_MODEL", "qwen2.5vl:7b").strip(),
             api_key=os.getenv("AI_API_KEY", ""),
             model_api_key=os.getenv("AI_MODEL_API_KEY", ""),
-            database_path=_env_path(
-                "AI_DATABASE_PATH", BASE_DIR / "data" / "ai" / "pass_docs_ai.sqlite3"
-            ),
-            input_json_path=_env_path(
-                "AI_INPUT_JSON", BASE_DIR / "data" / "input" / "package_input.json"
-            ),
-            required_document_codes=_env_codes(
-                "AI_REQUIRED_DOCUMENT_CODES", (6, 7, 44, 45, 52)
-            ),
+            database_path=_env_path("AI_DATABASE_PATH", BASE_DIR / "data" / "ai" / "pass_docs_ai.sqlite3"),
+            input_json_path=_env_path("AI_INPUT_JSON", BASE_DIR / "data" / "input" / "package_input.json"),
+            required_document_codes=_env_codes("AI_REQUIRED_DOCUMENT_CODES", (6, 7, 44, 45, 52)),
             dated_document_codes=_env_codes(
                 "AI_DATED_DOCUMENT_CODES",
                 (6, 7, 13, 14, 19, 26, 37, 43, 44, 57, 61, 63, 64, 65, 66, 67),
@@ -99,6 +99,15 @@ class AISettings:
             max_pages=_env_int("AI_MAX_PAGES", 20),
             render_dpi=_env_int("AI_RENDER_DPI", 160),
             max_image_dimension=_env_int("AI_MAX_IMAGE_DIMENSION", 2200),
+            required_vehicle_document_codes=_env_str_list(
+                "AI_REQUIRED_VEHICLE_DOC_CODES",
+                ("registration", "insurance", "inspection"),
+            ),
+            dated_vehicle_document_codes=_env_str_list(
+                "AI_DATED_VEHICLE_DOC_CODES",
+                ("insurance", "inspection", "power_of_attorney", "vehicle_pass"),
+            ),
+            pg_dsn=os.getenv("AI_PG_DSN", "").strip(),
         )
         settings.validate()
         return settings
@@ -111,9 +120,7 @@ class AISettings:
         if not 0 <= self.confidence_threshold <= 1:
             raise ValueError("AI_CONFIDENCE_THRESHOLD должен быть от 0 до 1")
         if self.max_file_size_mb <= 0 or self.max_pages <= 0:
-            raise ValueError(
-                "AI_MAX_FILE_SIZE_MB и AI_MAX_PAGES должны быть больше нуля"
-            )
+            raise ValueError("AI_MAX_FILE_SIZE_MB и AI_MAX_PAGES должны быть больше нуля")
         if not 72 <= self.render_dpi <= 300:
             raise ValueError("AI_RENDER_DPI должен быть от 72 до 300")
         if self.max_image_dimension < 512:

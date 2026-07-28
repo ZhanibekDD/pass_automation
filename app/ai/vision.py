@@ -16,9 +16,7 @@ class DocumentRenderError(RuntimeError):
     pass
 
 
-def _prepare_image(
-    image: Image.Image, *, page_number: int, max_dimension: int
-) -> PreparedPage:
+def _prepare_image(image: Image.Image, *, page_number: int, max_dimension: int) -> PreparedPage:
     normalized = ImageOps.exif_transpose(image).convert("RGB")
     normalized.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
     output = io.BytesIO()
@@ -36,22 +34,16 @@ def iter_document_pages(path: Path, settings: AISettings) -> Iterator[PreparedPa
     if not path.is_file():
         raise DocumentRenderError(f"Файл не найден: {path}")
     if path.suffix.lower() not in SUPPORTED_SUFFIXES:
-        raise DocumentRenderError(
-            f"Неподдерживаемый формат {path.suffix!r}; разрешены PDF, JPG и PNG"
-        )
+        raise DocumentRenderError(f"Неподдерживаемый формат {path.suffix!r}; разрешены PDF, JPG и PNG")
     if path.stat().st_size > settings.max_file_size_mb * 1024 * 1024:
-        raise DocumentRenderError(
-            f"Файл превышает лимит {settings.max_file_size_mb} МБ"
-        )
+        raise DocumentRenderError(f"Файл превышает лимит {settings.max_file_size_mb} МБ")
 
     if path.suffix.lower() != ".pdf":
         try:
             with Image.open(path) as image:
                 image.verify()
             with Image.open(path) as image:
-                yield _prepare_image(
-                    image, page_number=1, max_dimension=settings.max_image_dimension
-                )
+                yield _prepare_image(image, page_number=1, max_dimension=settings.max_image_dimension)
         except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
             raise DocumentRenderError("Изображение повреждено или небезопасно") from exc
         return
@@ -59,9 +51,7 @@ def iter_document_pages(path: Path, settings: AISettings) -> Iterator[PreparedPa
     try:
         import pypdfium2 as pdfium
     except ImportError as exc:
-        raise DocumentRenderError(
-            "Для PDF установите зависимости из requirements-ai.txt"
-        ) from exc
+        raise DocumentRenderError("Для PDF установите зависимости из requirements-ai.txt") from exc
 
     try:
         document = pdfium.PdfDocument(path)
@@ -70,9 +60,7 @@ def iter_document_pages(path: Path, settings: AISettings) -> Iterator[PreparedPa
 
     try:
         if len(document) > settings.max_pages:
-            raise DocumentRenderError(
-                f"PDF содержит {len(document)} страниц, лимит — {settings.max_pages}"
-            )
+            raise DocumentRenderError(f"PDF содержит {len(document)} страниц, лимит — {settings.max_pages}")
         scale = settings.render_dpi / 72
         for page_index in range(len(document)):
             page = document[page_index]

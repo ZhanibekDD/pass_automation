@@ -1,0 +1,77 @@
+# Production: vLLM (полная производительность на A40) + AI sidecar.
+# Порты vLLM и FastAPI НЕ открываются в интернет — только через Nginx.
+# Запуск: docker compose -f docker-compose.production.yml --profile vllm up -d
+
+services:
+  ai-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.ai
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      AI_ENABLED: "true"
+      AI_PROVIDER: vllm
+      AI_BASE_URL: "http://vllm:8000"
+      AI_VISION_MODEL: ${AI_VISION_MODEL:-Qwen/Qwen2.5-VL-7B-Instruct}
+      AI_DATABASE_PATH: /workspace/data/ai/pass_docs_ai.sqlite3
+      AI_INPUT_JSON: /workspace/data/input/package_input.json
+      AI_MAX_FILE_SIZE_MB: "30"
+      AI_REQUEST_TIMEOUT_SECONDS: "240"
+    ports:
+      - "127.0.0.1:${AI_API_PORT:-8090}:8090"
+    volumes:
+      - ./data/input:/workspace/data/input:ro
+      - ai_data_prod:/workspace/data/ai
+    depends_on:
+      vllm:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8090/api/ai/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  vllm:
+    image: vllm/vllm-openai:latest
+    profiles: ["vllm"]
+    command: >
+      --model ${AI_VISION_MODEL:-Qwen/Qwen2.5-VL-7B-Instruct}
+      --dtype bfloat16
+      --max-model-len 8192
+      --gpu-memory-utilization 0.85
+      --tensor-parallel-size 1
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - hf_models:/root/.cache/huggingface
+    expose:
+      - "8000"
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${NVIDIA_GPU_UUID:-0}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/v1/models"]
+      interval: 60s
+      timeout: 20s
+      retries: 5
+      start_period: 120s
+    shm_size: "4gb"
+
+volumes:
+  ai_data_prod:
+  hf_models:

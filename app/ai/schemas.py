@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -56,6 +56,33 @@ class EmployeeSnapshot:
     full_name: str
     iin: str | None
     documents: tuple[DocumentSnapshot, ...]
+
+
+@dataclass(frozen=True)
+class VehicleDocumentSnapshot:
+    document_id: str
+    document_code: str  # 'registration', 'insurance', 'inspection', etc.
+    source_path: Path
+
+
+@dataclass(frozen=True)
+class VehicleSnapshot:
+    vehicle_id: str
+    plate_number: str
+    make: str
+    model: str
+    vehicle_type: str
+    color: str
+    owner: str
+    organization: str
+    driver: str
+    site_object: str
+    pass_number: str
+    pass_start: str | None
+    pass_end: str | None
+    status: str
+    access_zone: str
+    documents: tuple[VehicleDocumentSnapshot, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)

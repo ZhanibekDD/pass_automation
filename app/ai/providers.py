@@ -34,9 +34,7 @@ def parse_page_extraction(content: str | dict[str, Any]) -> PageExtraction:
             return PageExtraction.model_validate(content)
         return PageExtraction.model_validate_json(_strip_json_fence(content))
     except (ValidationError, json.JSONDecodeError) as exc:
-        raise ModelResponseError(
-            "Vision-модель вернула ответ вне строгой JSON-схемы"
-        ) from exc
+        raise ModelResponseError("Vision-модель вернула ответ вне строгой JSON-схемы") from exc
 
 
 class VisionProvider(ABC):
@@ -73,11 +71,7 @@ class OllamaVisionProvider(VisionProvider):
             with httpx.Client(timeout=5) as client:
                 response = client.get(f"{self.settings.base_url}/api/tags")
                 response.raise_for_status()
-                models = [
-                    item.get("name")
-                    for item in response.json().get("models", [])
-                    if item.get("name")
-                ]
+                models = [item.get("name") for item in response.json().get("models", []) if item.get("name")]
             return {
                 "status": "ok",
                 "provider": "ollama",
@@ -138,11 +132,7 @@ class VLLMVisionProvider(VisionProvider):
             with httpx.Client(timeout=5, headers=self._headers()) as client:
                 response = client.get(f"{self.settings.base_url}/v1/models")
                 response.raise_for_status()
-                models = [
-                    item.get("id")
-                    for item in response.json().get("data", [])
-                    if item.get("id")
-                ]
+                models = [item.get("id") for item in response.json().get("data", []) if item.get("id")]
             return {
                 "status": "ok",
                 "provider": "vllm",
@@ -184,16 +174,12 @@ class VLLMVisionProvider(VisionProvider):
             },
         }
         with self._client() as client:
-            response = client.post(
-                f"{self.settings.base_url}/v1/chat/completions", json=payload
-            )
+            response = client.post(f"{self.settings.base_url}/v1/chat/completions", json=payload)
             response.raise_for_status()
         try:
             content = response.json()["choices"][0]["message"]["content"]
         except (IndexError, KeyError, TypeError, ValueError) as exc:
-            raise ModelResponseError(
-                "Некорректный OpenAI-compatible ответ vLLM"
-            ) from exc
+            raise ModelResponseError("Некорректный OpenAI-compatible ответ vLLM") from exc
         return parse_page_extraction(content)
 
 

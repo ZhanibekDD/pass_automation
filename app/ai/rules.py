@@ -68,9 +68,7 @@ def evaluate_document(
     page_expiry, expiry_date, expiry_conf = _best_field(pages, "expiry_date")
 
     fio_mismatch = bool(
-        found_fio
-        and expected_full_name
-        and normalize_fio(found_fio) != normalize_fio(expected_full_name)
+        found_fio and expected_full_name and normalize_fio(found_fio) != normalize_fio(expected_full_name)
     )
     if fio_mismatch:
         issues.append(
@@ -87,9 +85,7 @@ def evaluate_document(
 
     expected_iin_norm = normalize_iin(expected_iin)
     found_iin_norm = normalize_iin(found_iin)
-    iin_mismatch = bool(
-        expected_iin_norm and found_iin_norm and expected_iin_norm != found_iin_norm
-    )
+    iin_mismatch = bool(expected_iin_norm and found_iin_norm and expected_iin_norm != found_iin_norm)
     if iin_mismatch:
         issues.append(
             RuleIssue(
