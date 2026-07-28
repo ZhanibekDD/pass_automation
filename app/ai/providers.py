@@ -9,7 +9,7 @@ import httpx
 from pydantic import ValidationError
 
 from app.ai.config import AISettings
-from app.ai.schemas import PageExtraction
+from app.ai.schemas import PageExtraction, VehiclePageExtraction
 
 
 class ModelResponseError(RuntimeError):
@@ -34,9 +34,16 @@ def parse_page_extraction(content: str | dict[str, Any]) -> PageExtraction:
             return PageExtraction.model_validate(content)
         return PageExtraction.model_validate_json(_strip_json_fence(content))
     except (ValidationError, json.JSONDecodeError) as exc:
-        raise ModelResponseError(
-            "Vision-модель вернула ответ вне строгой JSON-схемы"
-        ) from exc
+        raise ModelResponseError("Vision-модель вернула ответ вне строгой JSON-схемы") from exc
+
+
+def parse_vehicle_page_extraction(content: str | dict[str, Any]) -> VehiclePageExtraction:
+    try:
+        if isinstance(content, dict):
+            return VehiclePageExtraction.model_validate(content)
+        return VehiclePageExtraction.model_validate_json(_strip_json_fence(content))
+    except (ValidationError, json.JSONDecodeError) as exc:
+        raise ModelResponseError("Vision-модель вернула ответ вне строгой JSON-схемы (ТС)") from exc
 
 
 class VisionProvider(ABC):
@@ -51,6 +58,10 @@ class VisionProvider(ABC):
     def extract(self, *, image_bytes: bytes, prompt: str) -> PageExtraction:
         raise NotImplementedError
 
+    @abstractmethod
+    def extract_vehicle(self, *, image_bytes: bytes, prompt: str) -> VehiclePageExtraction:
+        raise NotImplementedError
+
 
 class DisabledVisionProvider(VisionProvider):
     def health(self) -> dict[str, Any]:
@@ -63,6 +74,9 @@ class DisabledVisionProvider(VisionProvider):
     def extract(self, *, image_bytes: bytes, prompt: str) -> PageExtraction:
         raise RuntimeError("AI отключён. Установите AI_ENABLED=true")
 
+    def extract_vehicle(self, *, image_bytes: bytes, prompt: str) -> VehiclePageExtraction:
+        raise RuntimeError("AI отключён. Установите AI_ENABLED=true")
+
 
 class OllamaVisionProvider(VisionProvider):
     def _client(self) -> httpx.Client:
@@ -73,11 +87,7 @@ class OllamaVisionProvider(VisionProvider):
             with httpx.Client(timeout=5) as client:
                 response = client.get(f"{self.settings.base_url}/api/tags")
                 response.raise_for_status()
-                models = [
-                    item.get("name")
-                    for item in response.json().get("models", [])
-                    if item.get("name")
-                ]
+                models = [item.get("name") for item in response.json().get("models", []) if item.get("name")]
             return {
                 "status": "ok",
                 "provider": "ollama",
@@ -96,11 +106,11 @@ class OllamaVisionProvider(VisionProvider):
                 "error": type(exc).__name__,
             }
 
-    def extract(self, *, image_bytes: bytes, prompt: str) -> PageExtraction:
+    def _ollama_request(self, *, image_bytes: bytes, prompt: str, schema: dict) -> str:
         payload = {
             "model": self.settings.model,
             "stream": False,
-            "format": PageExtraction.model_json_schema(),
+            "format": schema,
             "options": {"temperature": 0},
             "messages": [
                 {
@@ -114,10 +124,21 @@ class OllamaVisionProvider(VisionProvider):
             response = client.post(f"{self.settings.base_url}/api/chat", json=payload)
             response.raise_for_status()
         try:
-            content = response.json()["message"]["content"]
+            return response.json()["message"]["content"]
         except (KeyError, TypeError, ValueError) as exc:
             raise ModelResponseError("Некорректный ответ Ollama") from exc
+
+    def extract(self, *, image_bytes: bytes, prompt: str) -> PageExtraction:
+        content = self._ollama_request(
+            image_bytes=image_bytes, prompt=prompt, schema=PageExtraction.model_json_schema()
+        )
         return parse_page_extraction(content)
+
+    def extract_vehicle(self, *, image_bytes: bytes, prompt: str) -> VehiclePageExtraction:
+        content = self._ollama_request(
+            image_bytes=image_bytes, prompt=prompt, schema=VehiclePageExtraction.model_json_schema()
+        )
+        return parse_vehicle_page_extraction(content)
 
 
 class VLLMVisionProvider(VisionProvider):
@@ -138,11 +159,7 @@ class VLLMVisionProvider(VisionProvider):
             with httpx.Client(timeout=5, headers=self._headers()) as client:
                 response = client.get(f"{self.settings.base_url}/v1/models")
                 response.raise_for_status()
-                models = [
-                    item.get("id")
-                    for item in response.json().get("data", [])
-                    if item.get("id")
-                ]
+                models = [item.get("id") for item in response.json().get("data", []) if item.get("id")]
             return {
                 "status": "ok",
                 "provider": "vllm",
@@ -157,7 +174,7 @@ class VLLMVisionProvider(VisionProvider):
                 "error": type(exc).__name__,
             }
 
-    def extract(self, *, image_bytes: bytes, prompt: str) -> PageExtraction:
+    def _vllm_request(self, *, image_bytes: bytes, prompt: str, schema: dict, schema_name: str) -> str:
         image_data = base64.b64encode(image_bytes).decode("ascii")
         payload = {
             "model": self.settings.model,
@@ -176,25 +193,34 @@ class VLLMVisionProvider(VisionProvider):
             ],
             "response_format": {
                 "type": "json_schema",
-                "json_schema": {
-                    "name": "pass_document_extraction",
-                    "strict": True,
-                    "schema": PageExtraction.model_json_schema(),
-                },
+                "json_schema": {"name": schema_name, "strict": True, "schema": schema},
             },
         }
         with self._client() as client:
-            response = client.post(
-                f"{self.settings.base_url}/v1/chat/completions", json=payload
-            )
+            response = client.post(f"{self.settings.base_url}/v1/chat/completions", json=payload)
             response.raise_for_status()
         try:
-            content = response.json()["choices"][0]["message"]["content"]
+            return response.json()["choices"][0]["message"]["content"]
         except (IndexError, KeyError, TypeError, ValueError) as exc:
-            raise ModelResponseError(
-                "Некорректный OpenAI-compatible ответ vLLM"
-            ) from exc
+            raise ModelResponseError("Некорректный OpenAI-compatible ответ vLLM") from exc
+
+    def extract(self, *, image_bytes: bytes, prompt: str) -> PageExtraction:
+        content = self._vllm_request(
+            image_bytes=image_bytes,
+            prompt=prompt,
+            schema=PageExtraction.model_json_schema(),
+            schema_name="pass_document_extraction",
+        )
         return parse_page_extraction(content)
+
+    def extract_vehicle(self, *, image_bytes: bytes, prompt: str) -> VehiclePageExtraction:
+        content = self._vllm_request(
+            image_bytes=image_bytes,
+            prompt=prompt,
+            schema=VehiclePageExtraction.model_json_schema(),
+            schema_name="vehicle_document_extraction",
+        )
+        return parse_vehicle_page_extraction(content)
 
 
 def create_provider(settings: AISettings) -> VisionProvider:

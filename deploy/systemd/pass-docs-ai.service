@@ -1,0 +1,32 @@
+[Unit]
+Description=Pass Docs Local AI sidecar (Docker Compose)
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/pass_automation
+
+# Staging (Ollama): раскомментировать нужный вариант
+ExecStart=/usr/bin/docker compose -f docker-compose.staging.yml --profile ollama up -d --remove-orphans
+ExecStop=/usr/bin/docker compose -f docker-compose.staging.yml down
+
+# Production (vLLM):
+# ExecStart=/usr/bin/docker compose -f docker-compose.production.yml --profile vllm up -d --remove-orphans
+# ExecStop=/usr/bin/docker compose -f docker-compose.production.yml down
+
+Restart=on-failure
+RestartSec=30s
+
+# Ограничения
+TimeoutStartSec=300
+TimeoutStopSec=60
+
+# Журнал
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pass-docs-ai
+
+[Install]
+WantedBy=multi-user.target

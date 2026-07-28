@@ -16,19 +16,13 @@ def extraction(
         document_type=ExtractedField(value="Удостоверение", confidence=confidence),
         full_name=ExtractedField(value=fio, confidence=confidence if fio else 0),
         iin=ExtractedField(value=iin, confidence=confidence if iin else 0),
-        issue_date=ExtractedField(
-            value=issue_date, confidence=confidence if issue_date else 0
-        ),
-        expiry_date=ExtractedField(
-            value=expiry_date, confidence=confidence if expiry_date else 0
-        ),
+        issue_date=ExtractedField(value=issue_date, confidence=confidence if issue_date else 0),
+        expiry_date=ExtractedField(value=expiry_date, confidence=confidence if expiry_date else 0),
     )
 
 
 def test_normalization_is_order_and_format_tolerant() -> None:
-    assert normalize_fio("Иванов  Иван Иванович") == normalize_fio(
-        "Иван Иванович ИВАНОВ"
-    )
+    assert normalize_fio("Иванов  Иван Иванович") == normalize_fio("Иван Иванович ИВАНОВ")
     assert normalize_iin("11 11") == "1111"
 
 

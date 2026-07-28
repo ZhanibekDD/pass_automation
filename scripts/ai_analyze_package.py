@@ -10,11 +10,11 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from app.ai.adapters import load_package_snapshot
-from app.ai.config import AISettings
-from app.ai.db import AIRepository
-from app.ai.providers import create_provider
-from app.ai.service import DocumentAIService
+from app.ai.adapters import load_package_snapshot  # noqa: E402
+from app.ai.config import AISettings  # noqa: E402
+from app.ai.db import AIRepository  # noqa: E402
+from app.ai.providers import create_provider  # noqa: E402
+from app.ai.service import DocumentAIService  # noqa: E402
 
 
 def main() -> None:

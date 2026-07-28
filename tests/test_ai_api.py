@@ -24,9 +24,7 @@ def test_required_endpoints_and_manual_review(tmp_path) -> None:
         ),
         encoding="utf-8",
     )
-    settings = make_settings(
-        tmp_path, input_json_path=input_json, enabled=False, api_key="local-secret"
-    )
+    settings = make_settings(tmp_path, input_json_path=input_json, enabled=False, api_key="local-secret")
     repository = AIRepository(settings.database_path)
     repository.initialize()
     finding_id = repository.add_finding(
@@ -55,7 +53,7 @@ def test_required_endpoints_and_manual_review(tmp_path) -> None:
         provider=DisabledVisionProvider(settings),
     )
     client = TestClient(app)
-    headers = {"X-API-Key": "local-secret", "X-Operator-ID": "operator-1"}
+    headers = {"x-api-key": "local-secret", "x-operator-id": "operator-1"}
 
     assert client.get("/api/ai/health").status_code == 200
     assert client.get("/api/ai/summary").status_code == 401

@@ -19,13 +19,14 @@ class FakeVisionProvider(VisionProvider):
     def extract(self, *, image_bytes: bytes, prompt: str) -> PageExtraction:
         return PageExtraction(
             document_type=ExtractedField(value="Удостоверение", confidence=0.96),
-            full_name=ExtractedField(
-                value="Другой Сотрудник Тестович", confidence=0.94
-            ),
+            full_name=ExtractedField(value="Другой Сотрудник Тестович", confidence=0.94),
             iin=ExtractedField(value="1111", confidence=0.93),
             issue_date=ExtractedField(value="01.01.2020", confidence=0.9),
             expiry_date=ExtractedField(value="01.01.2025", confidence=0.92),
         )
+
+    def extract_vehicle(self, *, image_bytes: bytes, prompt: str):
+        raise RuntimeError("extract_vehicle не используется в DocumentAIService")
 
 
 def test_service_persists_results_and_review_queue(tmp_path) -> None:

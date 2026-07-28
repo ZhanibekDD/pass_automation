@@ -1,21 +1,20 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional
 
 
 @dataclass
 class PackageInput:
     fio: str
     employee_index: int
-    documents: Dict[int, Path]
-    contractor_agreement: Optional[Path] = None
-    subcontract_agreement: Optional[Path] = None
-    signed_application_scan: Optional[Path] = None
-    iin: Optional[str] = None
+    documents: dict[int, Path]
+    contractor_agreement: Path | None = None
+    subcontract_agreement: Path | None = None
+    signed_application_scan: Path | None = None
+    iin: str | None = None
     # ISO YYYY-MM-DD, проверяется при загрузке JSON; в Excel — формат по шаблону (этап 4).
-    birth_date: Optional[str] = None
-    company: Optional[str] = None
-    profession: Optional[str] = None
+    birth_date: str | None = None
+    company: str | None = None
+    profession: str | None = None
 
 
 @dataclass
