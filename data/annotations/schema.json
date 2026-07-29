@@ -1,0 +1,79 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AI Extraction Annotation",
+  "description": "Ground truth annotations for AI extraction quality evaluation. NO PII stored — document_id is an internal DB key only.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["document_id", "document_code", "annotator_id", "annotated_at", "fields"],
+    "additionalProperties": false,
+    "properties": {
+      "document_id": {
+        "type": "string",
+        "description": "Internal AI DB document_id (EmployeeDocument PK). Not a name or IIN."
+      },
+      "document_code": {
+        "type": "integer",
+        "description": "DocumentType.code as integer."
+      },
+      "annotator_id": {
+        "type": "string",
+        "description": "Operator identifier (not full name). E.g. 'op1' or 'reviewer_A'."
+      },
+      "annotated_at": {
+        "type": "string",
+        "format": "date",
+        "description": "ISO 8601 date of annotation."
+      },
+      "fields": {
+        "type": "object",
+        "description": "Per-field ground truth. Keys must be EXTRACTABLE_FIELDS.",
+        "propertyNames": {
+          "enum": ["document_type", "full_name", "iin", "issue_date", "expiry_date"]
+        },
+        "additionalProperties": {
+          "type": "object",
+          "required": ["applicable", "present", "ai_extracted"],
+          "additionalProperties": false,
+          "properties": {
+            "applicable": {
+              "type": "boolean",
+              "description": "Is this field expected to be in this document type?"
+            },
+            "present": {
+              "type": "boolean",
+              "description": "Was the value actually in the document (human-verified)?"
+            },
+            "ai_extracted": {
+              "type": "boolean",
+              "description": "Did the AI produce a non-null value for this field?"
+            },
+            "ai_correct": {
+              "type": ["boolean", "null"],
+              "description": "Was the AI extraction correct? null if not applicable."
+            }
+          }
+        }
+      },
+      "findings": {
+        "type": "object",
+        "description": "Per-finding-code ground truth. Keys are issue_code values.",
+        "additionalProperties": {
+          "type": "object",
+          "required": ["expected", "detected"],
+          "additionalProperties": false,
+          "properties": {
+            "expected": {
+              "type": "boolean",
+              "description": "Should this finding be raised for this document?"
+            },
+            "detected": {
+              "type": "boolean",
+              "description": "Did the AI raise this finding?"
+            }
+          }
+        }
+      }
+    }
+  }
+}

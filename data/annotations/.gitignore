@@ -1,0 +1,5 @@
+# Annotation files with real document IDs must stay local (production data).
+# Only schema.json and sample.json are committed to git.
+*.json
+!schema.json
+!sample.json
