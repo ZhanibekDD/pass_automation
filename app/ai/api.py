@@ -235,6 +235,7 @@ def create_app(
             status=payload.status,
             operator_id=auth.operator_id,
             comment=payload.comment,
+            reason=payload.reason,
         )
         if item is None:
             raise HTTPException(status_code=404, detail="Элемент очереди не найден")
@@ -243,7 +244,7 @@ def create_app(
             f"review_{payload.status}",
             "review_item",
             str(item_id),
-            {"comment": payload.comment},
+            {"comment": payload.comment, "reason": payload.reason},
         )
         return item
 
