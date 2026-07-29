@@ -113,8 +113,18 @@ class RuleIssue:
     message: str
 
 
+OperatorReason = Literal[
+    "confirmed_raw",    # value is correct as extracted
+    "wrong_role",       # name/value belongs to signatory or employer, not the subject
+    "incomplete_value", # partial value (year-only date, truncated name)
+    "field_bleed",      # adjacent field content leaked into this field
+    "incorrect_value",  # OCR error or model hallucination
+]
+
+
 class ReviewUpdate(BaseModel):
     status: Literal["confirmed", "rejected"]
+    reason: OperatorReason | None = None
     comment: str = Field(default="", max_length=2000)
 
 

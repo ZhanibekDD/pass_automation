@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # ---------------------------------------------------------------------------
 # Схема v1 — для тестов миграции (воспроизводит состояние phase-1 БД).
@@ -384,6 +384,7 @@ CREATE TABLE IF NOT EXISTS ai_extractions (
     page_number INTEGER NOT NULL CHECK(page_number > 0),
     operator_status TEXT NOT NULL DEFAULT 'not_reviewed'
         CHECK(operator_status IN ('not_reviewed', 'confirmed', 'rejected')),
+    operator_reason TEXT,
     created_at TEXT NOT NULL
 );
 
@@ -402,6 +403,7 @@ CREATE TABLE IF NOT EXISTS ai_findings (
     message TEXT NOT NULL,
     operator_status TEXT NOT NULL DEFAULT 'not_reviewed'
         CHECK(operator_status IN ('not_reviewed', 'confirmed', 'rejected')),
+    operator_reason TEXT,
     dedupe_key TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL
 );
@@ -418,6 +420,7 @@ CREATE TABLE IF NOT EXISTS ai_review_queue (
         CHECK(status IN ('pending', 'confirmed', 'rejected')),
     operator_id TEXT,
     operator_comment TEXT NOT NULL DEFAULT '',
+    operator_reason TEXT,
     created_at TEXT NOT NULL,
     reviewed_at TEXT,
     UNIQUE(entity_type, entity_id)
@@ -572,10 +575,22 @@ def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
     conn.executescript(_V3_ADDITIONS_SQL)
 
 
+def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
+    """Идемпотентная миграция v3→v4.
+
+    Добавляет operator_reason в ai_extractions, ai_findings и ai_review_queue.
+    """
+    for table in ("ai_extractions", "ai_findings", "ai_review_queue"):
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}  # noqa: S608
+        if "operator_reason" not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN operator_reason TEXT")  # noqa: S608
+
+
 # Реестр миграций: from_version → функция
 _MIGRATIONS: dict[int, Any] = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
+    3: _migrate_v3_to_v4,
 }
 
 
@@ -868,6 +883,7 @@ class AIRepository:
         status: str,
         operator_id: str,
         comment: str,
+        reason: str | None = None,
     ) -> dict[str, Any] | None:
         if status not in {"confirmed", "rejected"}:
             raise ValueError("Некорректный статус ручной проверки")
@@ -878,15 +894,15 @@ class AIRepository:
             connection.execute(
                 """
                 UPDATE ai_review_queue
-                SET status = ?, operator_id = ?, operator_comment = ?, reviewed_at = ?
+                SET status = ?, operator_id = ?, operator_comment = ?, operator_reason = ?, reviewed_at = ?
                 WHERE id = ?
                 """,
-                (status, operator_id, comment, utc_now(), item_id),
+                (status, operator_id, comment, reason, utc_now(), item_id),
             )
             entity_table = "ai_findings" if item["entity_type"] == "finding" else "ai_extractions"
             connection.execute(
-                f"UPDATE {entity_table} SET operator_status = ? WHERE id = ?",  # noqa: S608
-                (status, item["entity_id"]),
+                f"UPDATE {entity_table} SET operator_status = ?, operator_reason = ? WHERE id = ?",  # noqa: S608
+                (status, reason, item["entity_id"]),
             )
             updated = connection.execute("SELECT * FROM ai_review_queue WHERE id = ?", (item_id,)).fetchone()
         self.audit(
