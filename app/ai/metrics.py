@@ -14,11 +14,10 @@ values (names, IIN, dates) are never written to annotation files.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-
 
 # ── Annotation data model ───────────────────────────────────────────────────────
 

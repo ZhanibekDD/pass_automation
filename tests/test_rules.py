@@ -22,7 +22,6 @@ from app.ai.rules import (
 )
 from app.ai.schemas import ExtractedField, PageExtraction
 
-
 # ── helpers ────────────────────────────────────────────────────────────────────
 
 

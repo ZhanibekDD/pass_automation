@@ -8,7 +8,6 @@ import json
 import tempfile
 from pathlib import Path
 
-
 from app.ai.metrics import (
     DocumentAnnotation,
     FieldAnnotation,
@@ -17,7 +16,6 @@ from app.ai.metrics import (
     load_annotations,
     load_annotations_dir,
 )
-
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
