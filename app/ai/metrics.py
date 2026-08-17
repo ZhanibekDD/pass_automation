@@ -7,7 +7,7 @@ Key rule: denominators are based on *applicable slots* (fields that are expected
 to be present in a given document type), NOT on 5 fields × page count.
 
 Coverage is tracked separately and is NOT labelled as "accuracy" — it measures
-how many applicable fields the AI extracted at all, regardless of correctness.
+how many present applicable fields the AI extracted, regardless of correctness.
 
 No PII is stored in annotations: document_id is an internal DB key; actual
 values (names, IIN, dates) are never written to annotation files.
@@ -103,7 +103,7 @@ class FieldMetrics:
     fp: int                 # extracted but wrong, OR hallucinated (not present)
     fn: int                 # not extracted but should have been
     tn: int                 # not extracted and not expected (or not present)
-    extracted_count: int    # total slots where AI produced any value
+    extracted_count: int    # present slots where AI produced any value
 
     @property
     def precision(self) -> float | None:
@@ -230,13 +230,15 @@ def calculate_metrics(annotations: list[DocumentAnnotation]) -> EvaluationReport
             acc["applicable"] += 1
             if fa.present:
                 acc["present"] += 1
-            if fa.ai_extracted:
+            if fa.present and fa.ai_extracted:
                 acc["extracted"] += 1
 
             if fa.present and fa.ai_correct:
                 acc["tp"] += 1
             elif fa.present and fa.ai_extracted and fa.ai_correct is False:
+                # Wrong extraction is both a false prediction and a missed truth.
                 acc["fp"] += 1
+                acc["fn"] += 1
             elif fa.present and not fa.ai_extracted:
                 acc["fn"] += 1
             elif not fa.present and not fa.ai_extracted:
@@ -304,7 +306,7 @@ def load_annotations_dir(directory: Path) -> list[DocumentAnnotation]:
     """Load and merge all *.json annotation files from a directory."""
     all_annotations: list[DocumentAnnotation] = []
     for p in sorted(directory.glob("*.json")):
-        if p.name.startswith("_") or p.name == "sample.json":
+        if p.name.startswith("_") or p.name in {"sample.json", "schema.json"}:
             continue  # skip schema/sample files
         all_annotations.extend(load_annotations(p))
     return all_annotations
