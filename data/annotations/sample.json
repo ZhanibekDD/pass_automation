@@ -1,0 +1,98 @@
+[
+  {
+    "document_id": "SAMPLE-001",
+    "document_code": 6,
+    "annotator_id": "op1",
+    "annotated_at": "2026-07-01",
+    "fields": {
+      "document_type": {
+        "applicable": true,
+        "present": true,
+        "ai_extracted": true,
+        "ai_correct": true
+      },
+      "full_name": {
+        "applicable": true,
+        "present": true,
+        "ai_extracted": true,
+        "ai_correct": true
+      },
+      "iin": {
+        "applicable": true,
+        "present": true,
+        "ai_extracted": true,
+        "ai_correct": false
+      },
+      "issue_date": {
+        "applicable": true,
+        "present": true,
+        "ai_extracted": true,
+        "ai_correct": true
+      },
+      "expiry_date": {
+        "applicable": true,
+        "present": true,
+        "ai_extracted": true,
+        "ai_correct": true
+      }
+    },
+    "findings": {
+      "fio_mismatch": {
+        "expected": false,
+        "detected": false
+      },
+      "expired_document": {
+        "expected": false,
+        "detected": false
+      }
+    }
+  },
+  {
+    "document_id": "SAMPLE-002",
+    "document_code": 7,
+    "annotator_id": "op1",
+    "annotated_at": "2026-07-01",
+    "fields": {
+      "document_type": {
+        "applicable": true,
+        "present": true,
+        "ai_extracted": true,
+        "ai_correct": true
+      },
+      "full_name": {
+        "applicable": true,
+        "present": true,
+        "ai_extracted": true,
+        "ai_correct": false
+      },
+      "iin": {
+        "applicable": true,
+        "present": true,
+        "ai_extracted": false,
+        "ai_correct": null
+      },
+      "issue_date": {
+        "applicable": true,
+        "present": true,
+        "ai_extracted": true,
+        "ai_correct": true
+      },
+      "expiry_date": {
+        "applicable": false,
+        "present": false,
+        "ai_extracted": false,
+        "ai_correct": null
+      }
+    },
+    "findings": {
+      "fio_mismatch": {
+        "expected": true,
+        "detected": false
+      },
+      "expired_document": {
+        "expected": false,
+        "detected": false
+      }
+    }
+  }
+]

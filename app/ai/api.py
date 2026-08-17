@@ -454,6 +454,33 @@ def create_app(
         _audit(auth, "api_read", "vehicle", vehicle_id)
         return resolved_repository.vehicle_analysis(vehicle_id)
 
+    # ------------------------------------------------------------------ metrics
+
+    @app.get("/api/ai/metrics")
+    def evaluation_metrics(
+        annotations_dir: Annotated[str, Query(max_length=512)] = "",
+        auth: AuthContext = Depends(require_role("admin")),
+    ) -> dict:
+        """Precision / recall / F1 / coverage from manually annotated ground truth.
+
+        Reads *.json files from data/annotations/ (or the path in annotations_dir).
+        Returns empty metrics if no annotation files are present.
+        Coverage is reported separately and is NOT labelled as accuracy.
+        """
+        from pathlib import Path
+
+        from app.ai.metrics import calculate_metrics, load_annotations_dir
+
+        ann_path = (
+            Path(annotations_dir)
+            if annotations_dir
+            else resolved_settings.input_json_path.parent.parent / "annotations"
+        )
+        _audit(auth, "api_read", "metrics", str(ann_path))
+        annotations = load_annotations_dir(ann_path)
+        report = calculate_metrics(annotations)
+        return report.as_dict()
+
     # ------------------------------------------------------------------ admin
 
     @app.get("/api/ai/audit-log")

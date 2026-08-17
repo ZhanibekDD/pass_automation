@@ -16,13 +16,11 @@ from datetime import date
 import pytest
 
 from app.ai.rules import (
-    ParsedDate,
     evaluate_document,
     parse_document_date,
     parse_document_date_rich,
 )
 from app.ai.schemas import ExtractedField, PageExtraction
-
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
