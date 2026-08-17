@@ -72,8 +72,23 @@ def test_all_wrong_extractions_gives_precision_0():
     report = calculate_metrics(anns)
     m = report.field_metrics["full_name"]
     assert m.precision == 0.0
+    assert m.recall == 0.0
     assert m.tp == 0
     assert m.fp == 2
+    assert m.fn == 2
+
+
+def test_wrong_extraction_reduces_recall():
+    anns = [
+        make_ann("A", fields=_full_name(ai_correct=True)),
+        make_ann("B", fields=_full_name(ai_correct=False)),
+    ]
+    report = calculate_metrics(anns)
+    m = report.field_metrics["full_name"]
+    assert m.tp == 1
+    assert m.fp == 1
+    assert m.fn == 1
+    assert m.recall == 0.5
 
 
 def test_missed_fields_give_fn_and_zero_recall():
@@ -108,20 +123,29 @@ def test_non_applicable_slots_excluded_from_denominator():
     assert m.precision == 1.0
 
 
-def test_hallucinated_field_counts_as_fp():
-    """AI extracted a value where field was not present → false positive."""
-    anns = [make_ann("A", fields={
-        "expiry_date": dict(applicable=True, present=False,
-                            ai_extracted=True, ai_correct=False)
-    })]
+def test_hallucinated_field_counts_as_fp_without_inflating_coverage():
+    """An absent-field extraction is an FP but not coverage."""
+    anns = [
+        make_ann("A", fields={
+            "expiry_date": dict(applicable=True, present=True,
+                                ai_extracted=True, ai_correct=True)
+        }),
+        make_ann("B", fields={
+            "expiry_date": dict(applicable=True, present=False,
+                                ai_extracted=True, ai_correct=False)
+        }),
+    ]
     report = calculate_metrics(anns)
     m = report.field_metrics["expiry_date"]
+    assert m.tp == 1
     assert m.fp == 1
-    assert m.tp == 0
+    assert m.present_count == 1
+    assert m.extracted_count == 1
+    assert m.coverage == 1.0
 
 
 def test_f1_is_harmonic_mean():
-    # 2 TP, 1 FP, 1 FN → precision = 2/3, recall = 2/3, F1 = 2/3
+    # Wrong extraction contributes FP+FN; missed extraction contributes FN.
     anns = [
         make_ann("A", fields=_full_name(ai_correct=True)),   # TP
         make_ann("B", fields=_full_name(ai_correct=True)),   # TP
@@ -132,10 +156,10 @@ def test_f1_is_harmonic_mean():
     m = report.field_metrics["full_name"]
     assert m.tp == 2
     assert m.fp == 1
-    assert m.fn == 1
+    assert m.fn == 2
     assert round(m.precision, 4) == round(2 / 3, 4)
-    assert round(m.recall, 4) == round(2 / 3, 4)
-    assert round(m.f1, 4) == round(2 / 3, 4)
+    assert round(m.recall, 4) == round(1 / 2, 4)
+    assert round(m.f1, 4) == round(4 / 7, 4)
 
 
 # ── coverage is separate from precision ───────────────────────────────────────
@@ -245,14 +269,17 @@ def test_load_annotations_from_file():
         tmp_path.unlink(missing_ok=True)
 
 
-def test_load_annotations_dir_skips_sample():
-    """sample.json should NOT be loaded as real annotation data."""
+def test_load_annotations_dir_skips_metadata_files():
+    """sample.json and schema.json must not be loaded as annotation batches."""
     with tempfile.TemporaryDirectory() as tmpdir:
         d = Path(tmpdir)
         sample = [{"document_id": "SAMPLE-001", "document_code": 6,
                    "annotator_id": "op1", "annotated_at": "2026-07-01",
                    "fields": {}, "findings": {}}]
         (d / "sample.json").write_text(json.dumps(sample))
+        schema = {"$schema": "https://json-schema.org/draft/2020-12/schema",
+                  "type": "array"}
+        (d / "schema.json").write_text(json.dumps(schema))
         real = [{"document_id": "REAL-001", "document_code": 7,
                  "annotator_id": "op1", "annotated_at": "2026-07-01",
                  "fields": {}, "findings": {}}]
