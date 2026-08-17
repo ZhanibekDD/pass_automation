@@ -8,11 +8,9 @@ import json
 import tempfile
 from pathlib import Path
 
-import pytest
 
 from app.ai.metrics import (
     DocumentAnnotation,
-    EvaluationReport,
     FieldAnnotation,
     FindingAnnotation,
     calculate_metrics,

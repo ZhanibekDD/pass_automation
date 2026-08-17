@@ -469,7 +469,7 @@ def create_app(
         """
         from pathlib import Path
 
-        from app.ai.metrics import load_annotations_dir, calculate_metrics
+        from app.ai.metrics import calculate_metrics, load_annotations_dir
 
         ann_path = (
             Path(annotations_dir)

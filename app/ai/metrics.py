@@ -14,8 +14,8 @@ values (names, IIN, dates) are never written to annotation files.
 """
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
+import json
 from pathlib import Path
 from typing import Any
 
@@ -65,7 +65,7 @@ class DocumentAnnotation:
     findings: dict[str, FindingAnnotation] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "DocumentAnnotation":
+    def from_dict(cls, data: dict[str, Any]) -> DocumentAnnotation:
         fields: dict[str, FieldAnnotation] = {}
         for fname, fdata in data.get("fields", {}).items():
             fields[fname] = FieldAnnotation(
